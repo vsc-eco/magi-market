@@ -6,7 +6,7 @@
 
 **Architecture:** Layered-in-place. A new `contract/money.go` holds all `math/big` logic (parse/format/add/sub/mul/bps-split + money state helpers). Monetary JSON fields become quoted decimal strings; NFT quantities stay `uint64`. Listings/offers drop NFT escrow and use `isApprovedForAll` + `safeTransferFrom`-on-sale; auctions keep escrow unchanged except amount typing. Every inbound payment transfer measures actual received via `tokenBalanceOf` before/after and distributes that. Spec: `docs/superpowers/specs/2026-05-17-magi-market-contract-compatibility-design.md`.
 
-**Tech Stack:** Go (tinygo `wasm-unknown`), `github.com/CosmWasm/tinyjson` (codegen via `/root/go/bin/tinyjson`), `math/big`, vsc-node wasm test harness (`vsc-node/lib/test_utils`).
+**Tech Stack:** Go (tinygo `wasm-unknown`), `github.com/CosmWasm/tinyjson` (generated `types_tinyjson.go` is hand-maintained — see Build/run invariants; the generator cannot run on a package-main contract here), `math/big`, vsc-node wasm test harness (`vsc-node/lib/test_utils`).
 
 **Test strategy:** Integration via the wasm harness only. The `contract` Go package is built solely by tinygo (its `sdk` uses `//go:wasmimport`), so host-side `go test ./contract/...` is not viable and no pure-unit rig is introduced — matching the existing suite, which is entirely harness-driven. Each behavioral task: add/adjust a harness test → build wasm → run → green → commit.
 
@@ -25,10 +25,10 @@
   ```
   GOTOOLCHAIN=go1.25.3 tinygo build -gc=custom -scheduler=none -panic=trap -no-debug -target=wasm-unknown -o <out> ./contract
   ```
-- tinyjson regen command (regenerates `contract/types_tinyjson.go` from struct tags):
-  ```
-  /root/go/bin/tinyjson -all contract/types.go
-  ```
+- **tinyjson regeneration is NOT available in this environment** (verified). tinyjson/easyjson bootstrap-imports the target package; Go forbids importing a `package main`, and the contract is `package main`. `-pkg`, `GOWORK=off`, in-dir invocation, and the temporary package-rename trick were all tried — the rename only emits stub (empty-body) marshalers, not the real code. The committed `contract/types_tinyjson.go` (the real 6061-line generated marshalers) was produced in the original author's non-`main`/Makefile environment.
+  - The `sdk/` scaffolding (`sdk_stub.go` + `runtime_imports.go`, committed) makes host builds / `go vet` / tooling compile and matches sibling contracts, but does **not** enable package-main regen.
+  - **Procedure for every type change:** do NOT run tinyjson. Hand-edit `contract/types_tinyjson.go` for ONLY the changed fields. For a field whose Go type flips `uint64`→`string`, replace its generated Marshal/Unmarshal fragment with the exact pattern an existing `string` field of the same struct-position uses (the file already contains the canonical `out.String(...)` / `in.String()` form for string fields and `out.Uint64(...)` / `in.Uint64()` for uint64). The edit is local and deterministic.
+  - **Correctness proof (replaces regen verification):** `tinygo build` must succeed AND the full wasm suite must pass. The harness round-trips real JSON payloads/responses/events through the actual compiled contract, so any marshaler mistake surfaces as a failing test — this is the binding verification, applied at the end of every type-changing task.
 - Test run:
   ```
   GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1
@@ -459,15 +459,16 @@ Apply these exact field-type changes (uint64 → string), leaving NFT `Amount`, 
 
 (JSON tags stay identical; tinyjson emits string fields as quoted JSON, no float/WASI.)
 
-- [ ] **Step 2: Regenerate tinyjson and build (expect contract compile errors — that's the failing state)**
+- [ ] **Step 2: Hand-edit `contract/types_tinyjson.go` for the changed fields, then build (expect contract compile errors — that's the failing state)**
 
-Run:
+Do NOT run tinyjson (it cannot regenerate a package-main contract here — see Build/run invariants). Instead, in `contract/types_tinyjson.go`, for each of the 8 fields changed in Step 1, locate that field's fragment in the struct's `MarshalTinyJSON` and `UnmarshalTinyJSON` methods and convert it from the uint64 form to the string form, copying the exact pattern an existing `string` field in the same file uses. Concretely: a uint64 field marshals via `out.Uint64(uint64(in.X))` and unmarshals via `in.X = uint64(in.Uint64())`; the string form is `out.String(string(in.X))` and `in.X = string(in.String())` (match the precise surrounding `RawString`/`RawByte` comma/brace tokens already present for adjacent fields — do not alter them). Change only the 8 affected fields' fragments; leave every other line byte-identical.
+
+Then:
 ```bash
 cd /home/dockeruser/magi/magi-market
-/root/go/bin/tinyjson -all contract/types.go
 GOTOOLCHAIN=go1.25.3 tinygo build -gc=custom -scheduler=none -panic=trap -no-debug -target=wasm-unknown -o test/artifacts/main.wasm ./contract 2>&1 | tail -10
 ```
-Expected: tinyjson regenerates `contract/types_tinyjson.go`; tinygo FAILS with type errors in `market.go`/`events.go` where `PricePerUnit`/`TotalPrice` etc. are used as uint64. This is expected — fixed in Steps 3–5.
+Expected: tinygo FAILS with type errors in `market.go`/`events.go` where `PricePerUnit`/`TotalPrice` etc. are used as uint64. This is expected — fixed in Steps 3–5. (The marshaler hand-edit itself is verified later by the full suite in Step 8.)
 
 - [ ] **Step 3: Rewrite the listing path in `contract/market.go`**
 
@@ -573,7 +574,7 @@ func doBuy(caller string, p *BuyPayload) {
 
 	// Escrow payment (balance-delta: distribute what we actually received).
 	received := escrowIn(paymentToken, caller, totalCost)
-	fee, royalty, sellerPayment := distributeFees(received, lockedFeeBps, lockedRoyaltyBps)
+	fee, royalty, sellerPayment := distributeFeesBig(received, lockedFeeBps, lockedRoyaltyBps)
 
 	// Transfer NFT from seller -> buyer using operator approval. If the seller
 	// moved/burned the NFT or revoked approval, this aborts and the whole tx
@@ -617,17 +618,21 @@ In `GetListing`, change the response field:
 
 - [ ] **Step 5: Update `contract/internal.go` and `contract/events.go`**
 
-5a. In `internal.go`, replace `nftIsSoulbound`'s parsing body with `return jsonBoolField(*result, "soulbound")` (drop the for-loop substring scan). Delete the now-unused uint64 fee functions `calculateFeeWithBps`, `calculateFee`, and the old uint64 `distributeFees`; add the big.Int `distributeFees`:
+5a. In `internal.go`, replace `nftIsSoulbound`'s parsing body with `return jsonBoolField(*result, "soulbound")` (drop the for-loop substring scan, keep the signature + nil-result guard).
+
+**Defect-1 fix — additive, do NOT delete the uint64 fee helpers in this task.** `distributeFees` (uint64) is still called by `doAcceptOffer` (offers, Task 3) and `auction.go` settle/buyout (Task 4); deleting it here would break the contract wasm build before those tasks migrate. Mirror the Task-1 `tokenTransferBig` pattern: KEEP `calculateFeeWithBps`, `calculateFee`, and the existing uint64 `distributeFees` untouched, and ADD a new big.Int function `distributeFeesBig`:
 ```go
-// distributeFees splits totalPrice into (fee, royalty, sellerPayment).
-func distributeFees(totalPrice *big.Int, lockedFeeBps, lockedRoyaltyBps uint64) (*big.Int, *big.Int, *big.Int) {
+// distributeFeesBig splits totalPrice into (fee, royalty, sellerPayment).
+// big.Int counterpart of distributeFees; the uint64 distributeFees stays
+// until its last caller (offers/auctions) is migrated, then is removed in Task 5.
+func distributeFeesBig(totalPrice *big.Int, lockedFeeBps, lockedRoyaltyBps uint64) (*big.Int, *big.Int, *big.Int) {
 	fee := mMulBpsDiv(totalPrice, lockedFeeBps)
 	royalty := mMulBpsDiv(totalPrice, lockedRoyaltyBps)
 	sellerPayment := mSub(mSub(totalPrice, fee), royalty)
 	return fee, royalty, sellerPayment
 }
 ```
-Leave `safeAdd/safeSub/safeMul` (still used for uint64 NFT quantities). The old uint64 `tokenTransfer`/`tokenTransferFrom` remain for now (Tasks 3–4 still reference them until migrated); buy uses the `*Big` variants.
+`doBuy` (Step 4) calls `distributeFeesBig`. Leave `safeAdd/safeSub/safeMul` and the old uint64 `tokenTransfer`/`tokenTransferFrom` (Tasks 3–4 still reference them until migrated; all uint64 fee/token helpers are removed in Task 5 once unused).
 
 5b. In `events.go`, change `emitListed`, `emitBought`, `emitListingUpdated` signatures so the monetary parameters are `string` and assign directly into the (now string) attribute fields. Example for `emitBought`:
 ```go
@@ -637,15 +642,14 @@ func emitBought(listingId uint64, buyer string, amount uint64, totalPrice, fee, 
 ```
 Mirror for `emitListed` (`pricePerUnit string`) and `emitListingUpdated` (`newPrice string`).
 
-- [ ] **Step 6: Regenerate tinyjson + build green**
+- [ ] **Step 6: Build green (tinyjson already hand-edited in Step 2)**
 
 Run:
 ```bash
 cd /home/dockeruser/magi/magi-market
-/root/go/bin/tinyjson -all contract/types.go
 GOTOOLCHAIN=go1.25.3 tinygo build -gc=custom -scheduler=none -panic=trap -no-debug -target=wasm-unknown -o test/artifacts/main.wasm ./contract && echo BUILD_OK
 ```
-Expected: `BUILD_OK`.
+Expected: `BUILD_OK`. If a marshaler hand-edit was malformed, tinygo fails here — fix the fragment to match the canonical string-field pattern (do not run tinyjson).
 
 - [ ] **Step 7: Update listing/buy tests to string prices + approval setup**
 
@@ -790,7 +794,7 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 	if mCmp(totalPrice, escrowed) > 0 {
 		sdk.Abort("Accept exceeds escrowed funds")
 	}
-	fee, royalty, sellerPayment := distributeFees(totalPrice, lockedFeeBps, lockedRoyaltyBps)
+	fee, royalty, sellerPayment := distributeFeesBig(totalPrice, lockedFeeBps, lockedRoyaltyBps)
 
 	nftSafeTransferFrom(nftContract, caller, buyer, tokenId, acceptAmount)
 
@@ -820,15 +824,14 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 
 `GetOffer`: `PricePerUnit: formatMoney(getOfferMoney(p.OfferId, "p"))`. In `events.go` change `emitOfferMade` (pricePerUnit string) and `emitOfferAccepted` (totalPrice/fee/royalty string) signatures + assignments.
 
-- [ ] **Step 6: Regenerate + build**
+- [ ] **Step 6: Hand-edit tinyjson for offer fields, then build**
 
-Run:
+Do NOT run tinyjson (see Build/run invariants). Hand-edit `contract/types_tinyjson.go` for ONLY the offer fields changed in Step 1 (`MakeOfferPayload.PricePerUnit`, `OfferResponse.PricePerUnit`, `OfferMadeAttributes.PricePerUnit`, `OfferAcceptedAttributes.TotalPrice/Fee/Royalty`), converting each from the uint64 marshaler form to the string form using the canonical in-file string-field pattern. Then:
 ```bash
 cd /home/dockeruser/magi/magi-market
-/root/go/bin/tinyjson -all contract/types.go
 GOTOOLCHAIN=go1.25.3 tinygo build -gc=custom -scheduler=none -panic=trap -no-debug -target=wasm-unknown -o test/artifacts/main.wasm ./contract && echo BUILD_OK
 ```
-Expected: `BUILD_OK`.
+Expected: `BUILD_OK`. (Offers now use only `distributeFeesBig`/`tokenTransferBig`; the uint64 `distributeFees` still exists for auctions until Task 4.)
 
 - [ ] **Step 7: Update offer tests**
 
@@ -890,8 +893,8 @@ func getDutchAuctionCurrentPriceBig(startPrice, endPrice *big.Int, startBlock, e
 ```
 - `CreateAuction`: `startP := parseMoney(p.StartPrice)`; for dutch `endP := parseMoney(p.EndPrice)` with `mCmp(endP, startP) >= 0` → abort "Dutch auction end price must be less than start price"; for english `endP := mZero()`. Require `!mIsZero(startP)`. Keep the NFT `nftSafeTransferFrom(p.NftContract, caller, contractAddr, ...)` escrow exactly as today. Store `setAuctionMoney(id,"sp",startP)`, `setAuctionMoney(id,"ep",endP)`. Emit with `formatMoney`.
 - `PlaceBid` english branch: `bid := parseMoney(p.BidAmount)`; `reserveTotal := mMulU64(getAuctionMoney(id,"sp"), amount)`; `currentHighBid := getAuctionMoney(id,"ha")`; comparisons via `mCmp`; min-increment: `minBid := mAdd(currentHighBid, mMulBpsDiv(currentHighBid, minIncBps))`. Escrow via `received := escrowIn(paymentToken, caller, bid)`; store `setAuctionMoney(id,"ha",received)` and refund previous `getAuctionMoney`-read high bid with `tokenTransferBig`. Anti-snipe block logic unchanged.
-- `PlaceBid` dutch branch: `currentPrice := getDutchAuctionCurrentPriceBig(getAuctionMoney(id,"sp"), getAuctionMoney(id,"ep"), startBlock, endBlock, currentBlock)`; `totalPrice := mMulU64(currentPrice, amount)`; `received := escrowIn(...)`; require `mCmp(received, totalPrice) >= 0`; transfer escrowed NFT to buyer (unchanged); `distributeFees(received, ...)`; payouts via `tokenTransferBig`; emit with `formatMoney`.
-- `SettleAuction`: read `highBid := getAuctionMoney(id,"ha")`; `if highBidder == "" || mIsZero(highBid)` → return NFT to seller (unchanged escrow return) and `emitAuctionSettled(id,"","0","0","0")`; else NFT to winner (unchanged), `fee,royalty,sellerPayment := distributeFees(highBid, ...)`, payouts via `tokenTransferBig`, emit with `formatMoney`.
+- `PlaceBid` dutch branch: `currentPrice := getDutchAuctionCurrentPriceBig(getAuctionMoney(id,"sp"), getAuctionMoney(id,"ep"), startBlock, endBlock, currentBlock)`; `totalPrice := mMulU64(currentPrice, amount)`; `received := escrowIn(...)`; require `mCmp(received, totalPrice) >= 0`; transfer escrowed NFT to buyer (unchanged); `distributeFeesBig(received, ...)`; payouts via `tokenTransferBig`; emit with `formatMoney`.
+- `SettleAuction`: read `highBid := getAuctionMoney(id,"ha")`; `if highBidder == "" || mIsZero(highBid)` → return NFT to seller (unchanged escrow return) and `emitAuctionSettled(id,"","0","0","0")`; else NFT to winner (unchanged), `fee,royalty,sellerPayment := distributeFeesBig(highBid, ...)`, payouts via `tokenTransferBig`, emit with `formatMoney`.
 - `CancelAuction`: unchanged except it already returns escrowed NFT — keep.
 - `GetAuction`: `StartPrice/EndPrice/HighBid` via `formatMoney(getAuctionMoney(...))`.
 
@@ -899,15 +902,14 @@ func getDutchAuctionCurrentPriceBig(startPrice, endPrice *big.Int, startBlock, e
 
 Change `emitAuctionCreated` (startPrice/endPrice string), `emitBidPlaced` (bidAmount string), `emitAuctionSettled` (finalPrice/fee/royalty string) and assign into the now-string attribute fields.
 
-- [ ] **Step 4: Regenerate + build**
+- [ ] **Step 4: Hand-edit tinyjson for auction fields, then build**
 
-Run:
+Do NOT run tinyjson (see Build/run invariants). Hand-edit `contract/types_tinyjson.go` for ONLY the auction fields changed in Step 1 (`CreateAuctionPayload.StartPrice/EndPrice`, `PlaceBidPayload.BidAmount`, `AuctionResponse.StartPrice/EndPrice/HighBid`, `AuctionCreatedAttributes.StartPrice/EndPrice`, `BidPlacedAttributes.BidAmount`, `AuctionSettledAttributes.FinalPrice/Fee/Royalty`), converting each uint64 fragment to the canonical string-field form. Then:
 ```bash
 cd /home/dockeruser/magi/magi-market
-/root/go/bin/tinyjson -all contract/types.go
 GOTOOLCHAIN=go1.25.3 tinygo build -gc=custom -scheduler=none -panic=trap -no-debug -target=wasm-unknown -o test/artifacts/main.wasm ./contract && echo BUILD_OK
 ```
-Expected: `BUILD_OK`.
+Expected: `BUILD_OK`. (After this task no caller of the uint64 `distributeFees`/`tokenTransfer*` remains except admin emergency-withdraw, removed in Task 5.)
 
 - [ ] **Step 5: Update `test/auction_test.go`**
 
@@ -958,7 +960,7 @@ with:
 func getMinOfferMoney() *big.Int   { return getMoneyState("min_ofr") }
 func setMinOfferMoney(v *big.Int)  { setMoneyState("min_ofr", v) }
 ```
-Update the `MakeOffer` min-offer check (Task 3 already reads `getMoneyState("min_ofr")` — switch it to `getMinOfferMoney()` for consistency). Delete the old uint64 `tokenTransfer` and `tokenTransferFrom` (all call sites now use `tokenTransferBig`/`tokenTransferFromBig`); keep `nftSafeTransferFrom`, `nftBalanceOf`, `nftGetOwner`.
+Update the `MakeOffer` min-offer check (Task 3 already reads `getMoneyState("min_ofr")` — switch it to `getMinOfferMoney()` for consistency). Now that no caller remains, delete the old uint64 `tokenTransfer`, `tokenTransferFrom`, AND the uint64 fee helpers `calculateFeeWithBps`, `calculateFee`, `distributeFees` (the deferred Defect-1 cleanup — Tasks 2–4 moved every caller to `distributeFeesBig`/`tokenTransferBig`). Keep `nftSafeTransferFrom`, `nftBalanceOf`, `nftGetOwner`, `distributeFeesBig`, and the `*Big` token helpers. Before deleting, `grep -n 'distributeFees(\|[^B]tokenTransfer(\|tokenTransferFrom(' contract/*.go` to confirm zero remaining uint64 callers; if any remain, that caller was missed in its task — fix it, don't keep the helper.
 
 - [ ] **Step 3: `market.go` minOffer + emergencyWithdraw**
 
@@ -991,11 +993,11 @@ Update the `MakeOffer` min-offer check (Task 3 already reads `getMoneyState("min
 ```
 Change `emitEmergencyWithdraw` signature so `amount` is `string`.
 
-- [ ] **Step 4: Regenerate + build + run full suite**
+- [ ] **Step 4: Hand-edit tinyjson, build, run full suite**
 
+Do NOT run tinyjson (see Build/run invariants). Hand-edit `contract/types_tinyjson.go` for ONLY the fields changed in Step 1 (`SetMinOfferPayload.MinOffer`, `MinOfferResponse.MinOffer`, `InfoResponse.MinOffer`, `EmergencyWithdrawPayload.Amount`, `EmergencyWithdrawAttributes.Amount`), converting each uint64 fragment to the canonical string-field form. Then:
 ```bash
 cd /home/dockeruser/magi/magi-market
-/root/go/bin/tinyjson -all contract/types.go
 GOTOOLCHAIN=go1.25.3 tinygo build -gc=custom -scheduler=none -panic=trap -no-debug -target=wasm-unknown -o test/artifacts/main.wasm ./contract && echo BUILD_OK
 ```
 Expected: `BUILD_OK`. Then update any failing `minOffer`/`emergencyWithdraw`/token-amount assertions in the review/expiration/royalty test files to quoted strings, and:
@@ -1009,10 +1011,12 @@ Expected: `ok  	magi_market/test` (entire suite green).
 ```bash
 cd /home/dockeruser/magi/magi-market
 git add contract/ test/
-git commit -m "feat: big.Int minOffer + emergency token withdraw; drop uint64 token helpers
+git commit -m "feat: big.Int minOffer + emergency token withdraw; drop uint64 helpers
 
 minOffer and emergencyWithdraw token amounts are big.Int strings;
-removed the now-unused uint64 tokenTransfer/tokenTransferFrom."
+removed the now-unused uint64 tokenTransfer/tokenTransferFrom and the
+uint64 fee helpers calculateFeeWithBps/calculateFee/distributeFees
+(deferred Defect-1 cleanup; all callers moved to *Big in Tasks 2-4)."
 ```
 
 ---
@@ -1117,7 +1121,9 @@ git commit -m "docs: record UTXO mapping payment-token wire-compat verification"
 
 **Placeholder scan:** No TBD/TODO; every code step has complete code or exact field-level instructions; commands have expected output.
 
-**Type consistency:** `escrowIn`/`tokenTransferBig`/`tokenTransferFromBig`/`tokenBalanceOf`/`nftIsApprovedForAll`/`jsonBoolField` defined in Task 1 and used with identical signatures in Tasks 2–6. Money helpers (`parseMoney`/`formatMoney`/`mMulU64`/`mMulBpsDiv`/`mCmp`/`mIsZero`/`mSub`/`mAdd`/`getMoneyState`/per-entity get/set) consistent throughout. `distributeFees` redefined once (Task 2 Step 5a) as `(*big.Int, uint64, uint64) -> (*big.Int,*big.Int,*big.Int)` and used consistently after.
+**Type consistency:** `escrowIn`/`tokenTransferBig`/`tokenTransferFromBig`/`tokenBalanceOf`/`nftIsApprovedForAll`/`jsonBoolField` defined in Task 1 and used with identical signatures in Tasks 2–6. Money helpers (`parseMoney`/`formatMoney`/`mMulU64`/`mMulBpsDiv`/`mCmp`/`mIsZero`/`mSub`/`mAdd`/`getMoneyState`/per-entity get/set) consistent throughout. `distributeFeesBig` added (Task 2 Step 5a, additive — uint64 `distributeFees` kept until Task 5 to avoid breaking the contract build before offers/auctions migrate) as `(*big.Int, uint64, uint64) -> (*big.Int,*big.Int,*big.Int)`; `doBuy`/`doAcceptOffer`/auction settle+dutch all call `distributeFeesBig`; uint64 `distributeFees`/`calculateFee*`/`tokenTransfer*` deleted in Task 5 Step 2 once callerless (Defect-1 resolution).
+
+**tinyjson note:** `contract/types_tinyjson.go` is hand-maintained per task (the generator cannot bootstrap a package-main contract in this environment — verified). Each type-changing task hand-edits only the changed fields' marshaler fragments using the canonical in-file string/uint64 patterns; correctness is bound by tinygo build + the full wasm suite, not by re-running tinyjson.
 
 **Known sequencing note:** Between Task 2 and Task 4 the shared `types.go`/`types_tinyjson.go` is partially migrated, so the full suite is intentionally not green until Task 4 Step 6 (each task verifies its own sub-suite; later-surface suites are expected red and explicitly bounded). This is called out in each task's run step.
 
