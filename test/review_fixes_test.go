@@ -378,12 +378,13 @@ func TestBatchBuyOneInvalidAborts(t *testing.T) {
 	batchPayload := `{"items":[{"listingId":0,"amount":1},{"listingId":999,"amount":1}]}`
 	CallMarket(t, ct, "batchBuy", []byte(batchPayload), nil, buyer, "", false, gas, "Listing not active")
 
-	// NOTE: In the VSC runtime, state mutations within a failed call are NOT rolled back.
-	// The first buy in the batch went through before the second item aborted.
-	// This means batch operations are best-effort, not atomic.
+	// The VSC runtime rolls back ALL state mutations of a failed call: when
+	// the second batch item aborts, the first item's buy is reverted too.
+	// batchBuy is therefore atomic (all-or-nothing), and the marketplace's
+	// escrow/approval flows depend on this guarantee.
 	listing, _, _ := CallMarket(t, ct, "getListing", []byte(`{"listingId":0}`), nil, "hive:anyone", "", true, gas, "")
 	l := ParseListing(listing)
-	assert.Equal(t, uint64(4), l.Amount) // first buy succeeded
+	assert.Equal(t, uint64(5), l.Amount) // full rollback: nothing consumed
 }
 
 // ===================================
