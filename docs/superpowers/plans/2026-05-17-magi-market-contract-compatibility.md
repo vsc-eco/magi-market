@@ -669,7 +669,7 @@ In the listing/buy/delist/update cases of `test/listing_test.go`, `test/basic_te
 Run: `GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 -run 'Listing|Basic|Feature|Edge' -v 2>&1 | tail -20`
 Expected: listed/buy/delist/update tests PASS.
 Then full: `GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 2>&1 | tail -8`
-Expected: offer/auction suites may now fail to build/compile because they share `types.go` structs not yet migrated — that is acceptable ONLY if the failure is confined to offer/auction/collection tests. If listing/buy/basic regressed, STOP and fix before proceeding.
+**Bounded-failure expectation (staged migration — this is the gate):** Task 2's gate is NOT a green full suite. It is: (a) `tinygo build` green; (b) the DEDICATED files `listing_test.go`/`basic_test.go`/`features_test.go`/`edge_cases_test.go` listing/buy/delist/update cases green; (c) no genuine listing/buy regression. Every remaining full-suite failure must be confined to not-yet-migrated cross-cutting files (`review*`, `expiration_test.go`, `royalty_test.go`, offer/auction tests) that later tasks — ultimately **Task 5 — own and sweep to 245/245**. The failure count may exceed the prior baseline because shared files' listing cases flip to needing quoted prices; that is the documented design, not a regression. Confirm no dedicated/already-migrated file test is in the failing set; do not expand Task 2 to migrate cross-cutting files.
 
 - [ ] **Step 9: Commit**
 
@@ -843,7 +843,9 @@ Also fix the second pre-existing failure, `TestBuyerCannotAcceptOwnOffer` in `te
 
 Run: `GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 -run 'Offer|Collection' -v 2>&1 | tail -20`
 Expected: PASS.
-Then `GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 2>&1 | tail -8` — only auction-related suites may still fail (migrated in Task 4); listing/buy/offer must be green.
+Then `GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 2>&1 | tail -8`.
+
+**Bounded-failure expectation (staged migration — this is the gate, read carefully):** Task 3's gate is NOT a green full suite. It is: (a) `tinygo build` green; (b) the DEDICATED offer files `offer_test.go` + `collection_offer_test.go` fully green; (c) `TestBuyerCannotAcceptOwnOffer` green; (d) Task-2 listing/buy tests still green; (e) NO NEW genuine regressions — every remaining full-suite failure must be a strict subset of the prior task's failures, confined to the cross-cutting files (`review_test.go`, `review2_test.go`, `review3_test.go`, `review_fixes_test.go`, `review3_fixes_test.go`, `expiration_test.go`, `royalty_test.go`, `features_test.go`, `edge_cases_test.go`) that **Task 5 owns and sweeps to 245/245**. Migrating offers to string prices intentionally flips those files' offer cases into the bounded set — that is the documented design, NOT a gate violation. Verify (e) by diffing the failing-test set against the previous commit's failing-test set: the count may rise, but the set must contain no test from a dedicated/already-migrated file. Do not expand Task 3 to migrate the cross-cutting files.
 
 - [ ] **Step 9: Commit**
 
@@ -915,12 +917,13 @@ Expected: `BUILD_OK`. (After this task no caller of the uint64 `distributeFees`/
 
 Quote all `startPrice`/`endPrice`/`bidAmount` payload values and expected amount outputs. Keep existing escrow assertions (createAuction moves NFT into `MarketContractAddress`; settle/cancel return it) — these must still hold. The auction seller still needs the NFT and approval is NOT required for auctions (escrow uses caller authority); leave existing mint/escrow setup as-is, only string-ify amounts.
 
-- [ ] **Step 6: Run auction suite then FULL suite green**
+- [ ] **Step 6: Run auction suite, then full suite (bounded)**
 
 Run: `GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 -run Auction -v 2>&1 | tail -20`
 Expected: PASS.
-Then: `GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 2>&1 | tail -8`
-Expected: `ok  	magi_market/test` — entire suite green again (Tasks 2–4 complete the migration).
+Then: `GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 2>&1 | tail -8`.
+
+**Bounded-failure expectation (staged migration — this is the gate, NOT a green full suite):** Task 4's gate is: (a) `tinygo build` green; (b) the DEDICATED `auction_test.go` fully green; (c) Task-2/3 listing/buy/offer dedicated tests still green; (d) no NEW genuine regression. The full suite is still NOT green after Task 4 — the cross-cutting files (`review*`, `expiration_test.go`, `royalty_test.go`, `features_test.go`, `edge_cases_test.go`) still carry unquoted numeric prices and old-escrow/auction premises and remain red BY DESIGN until **Task 5 performs the full sweep to 245/245**. Confirm the remaining failures are confined to those cross-cutting files and no dedicated/already-migrated file regressed; do not expand Task 4 to migrate them. The suite reaches `ok  	magi_market/test` only at the end of Task 5.
 
 - [ ] **Step 7: Commit**
 
@@ -1004,7 +1007,7 @@ Expected: `BUILD_OK`.
 
 **Task 5 owns the FULL remaining test-suite migration sweep (the documented staged-migration endpoint).** Tasks 2–4 migrated only their own dedicated test files; the cross-cutting files `review_test.go`, `review2_test.go`, `review3_test.go`, `review_fixes_test.go`, `review3_fixes_test.go`, `expiration_test.go`, `royalty_test.go` (and any residual offer/auction cases elsewhere) still send unquoted numeric `pricePerUnit`/`newPrice`/`bidAmount`/`startPrice`/`endPrice`/`minOffer`/emergency-withdraw `amount` and still assert numeric `uint64(...)` on now-string response/event fields, or still assume the old NFT-escrow-on-list/auction-return premise. In this step:
 - Quote every numeric monetary payload value (`pricePerUnit`,`newPrice`,`bidAmount`,`startPrice`,`endPrice`,`minOffer`, emergency-withdraw token `amount`) across ALL still-failing test files.
-- Change every assertion comparing a now-string field (e.g. `listing.PricePerUnit`, bought/offer/auction/settled event amounts) from `uint64(N)` to the quoted string form.
+- Change every assertion comparing a now-string field (e.g. `listing.PricePerUnit`, bought/offer/auction/settled event amounts) from `uint64(N)` to the quoted string form. This includes updating `test/helpers_test.go` parse-result structs whose fields became string responses (e.g. `OfferResult.PricePerUnit`, and any auction/offer/listing money fields still typed `uint64`) to `string`, and re-tightening any raw-JSON `assert.Contains` workarounds (e.g. offer_test.go's `pricePerUnit` check) back to typed struct assertions once the helper field is `string`.
 - Update listing/offer cases that assumed market-held NFT escrow on list to the approval model (seller keeps NFT; approve market as operator via the existing helper; `delist` moves no NFT) — auctions keep escrow, leave those assertions.
 - Iterate file-by-file until the FULL suite is green. Use the enumerated failing-test list as the worklist; nothing may remain red.
 ```bash
