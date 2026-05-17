@@ -3,65 +3,18 @@ package sdk
 import (
 	"encoding/hex"
 	"strconv"
-	_ "magi_market/runtime"
 
 	"github.com/CosmWasm/tinyjson"
 )
 
-//go:wasmimport sdk console.log
-func log(s *string) *string
+// Low-level host bindings (`log`, `stateSetObject`, `contractCall`, `abort`,
+// ...) live in runtime_imports.go (//go:build gc.custom, real wasmimports)
+// and sdk_stub.go (//go:build !gc.custom, host build stubs). This file holds
+// the build-tag-agnostic wrappers.
 
 func Log(s string) {
 	log(&s)
 }
-
-//go:wasmimport sdk db.set_object
-func stateSetObject(key *string, value *string) *string
-
-//go:wasmimport sdk db.get_object
-func stateGetObject(key *string) *string
-
-//go:wasmimport sdk db.rm_object
-func stateDeleteObject(key *string) *string
-
-//go:wasmimport sdk system.get_env
-func getEnv(arg *string) *string
-
-//go:wasmimport sdk system.get_env_key
-func getEnvKey(arg *string) *string
-
-//go:wasmimport sdk hive.get_balance
-func getBalance(arg1 *string, arg2 *string) *string
-
-//go:wasmimport sdk hive.draw
-func hiveDraw(arg1 *string, arg2 *string) *string
-
-//go:wasmimport sdk hive.transfer
-func hiveTransfer(arg1 *string, arg2 *string, arg3 *string) *string
-
-//go:wasmimport sdk hive.withdraw
-func hiveWithdraw(arg1 *string, arg2 *string, arg3 *string) *string
-
-//go:wasmimport sdk contracts.read
-func contractRead(contractId *string, key *string) *string
-
-//go:wasmimport sdk contracts.call
-func contractCall(contractId *string, method *string, payload *string, options *string) *string
-
-//go:wasmimport sdk tss.create_key
-func tssCreateKey(keyId *string, algo *string) *string
-
-//go:wasmimport sdk tss.sign_key
-func tssSignKey(keyId *string, msgId *string) *string
-
-//go:wasmimport sdk tss.get_key
-func tssGetKey(keyId *string) *string
-
-//go:wasmimport env abort
-func abort(msg, file *string, line, column *int32)
-
-//go:wasmimport env revert
-func revert(msg, symbol *string)
 
 // Aborts the contract execution
 func Abort(msg string) {
