@@ -168,6 +168,45 @@ Expected: commit succeeds; `git status` shows no tracked `go.work`.
 
 ---
 
+## Task 0b: Correct the stale batch-rollback test (pre-existing, folded in)
+
+**Why:** `TestBatchBuyOneInvalidAborts` asserts the VSC runtime does NOT roll back a failed call (expects a listing partially consumed). The current go-vsc-node fully rolls back on abort, so the listing stays whole. The test's premise is outdated AND contradicts the atomicity our approval + balance-delta design relies on (a failed `buy` MUST revert its escrow leg). Fixing the test to assert full-rollback aligns it with both runtime reality and our design. (`TestBuyerCannotAcceptOwnOffer`, the other pre-existing failure, is fixed in Task 3 via a `caller == buyer` guard — see that task.)
+
+**Files:** Modify `test/review_fixes_test.go`
+
+- [ ] **Step 1: Rewrite the assertion and comment in `TestBatchBuyOneInvalidAborts`**
+
+Replace the misleading NOTE block and assertion (currently lines ~381–386) so it reads:
+```go
+	// The VSC runtime rolls back ALL state mutations of a failed call: when
+	// the second batch item aborts, the first item's buy is reverted too.
+	// batchBuy is therefore atomic (all-or-nothing), and the marketplace's
+	// escrow/approval flows depend on this guarantee.
+	listing, _, _ := CallMarket(t, ct, "getListing", []byte(`{"listingId":0}`), nil, "hive:anyone", "", true, gas, "")
+	l := ParseListing(listing)
+	assert.Equal(t, uint64(5), l.Amount) // full rollback: nothing consumed
+```
+
+- [ ] **Step 2: Run the full suite — expect 244/245 (only `TestBuyerCannotAcceptOwnOffer` still red, fixed in Task 3)**
+
+Run: `GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 2>&1 | tail -8`
+Expected: only `TestBuyerCannotAcceptOwnOffer` fails; everything else green. If anything else is red, STOP and report.
+
+- [ ] **Step 3: Commit**
+
+```bash
+cd /home/dockeruser/magi/magi-market
+git add test/review_fixes_test.go
+git commit -m "test: assert batchBuy is atomic (full rollback) per current runtime
+
+TestBatchBuyOneInvalidAborts encoded a stale assumption that the VSC
+runtime does not roll back failed calls. It does roll back fully;
+batchBuy is all-or-nothing. The approval + balance-delta design relies
+on this atomicity. Pre-existing failure, folded into the plan."
+```
+
+---
+
 ## Task 1: `money.go` primitives + cross-contract helper upgrades (additive, no behavior change)
 
 **Why:** Foundation for every later task. Pure additions — existing flows untouched — so the suite stays green and the diff is reviewable in isolation.
@@ -718,6 +757,11 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 	}
 
 	buyer := getOfferField(offerId, "b")
+	if caller == buyer {
+		// Mirrors doBuy's "Seller cannot buy own listing": a self-deal is
+		// economically meaningless and would be a self-transfer on the NFT.
+		sdk.Abort("Buyer cannot accept own offer")
+	}
 	nftContract := getOfferField(offerId, "nc")
 	offerAmount := getOfferUint64(offerId, "a")
 	pricePerUnit := getOfferMoney(offerId, "p")
@@ -789,6 +833,8 @@ Expected: `BUILD_OK`.
 - [ ] **Step 7: Update offer tests**
 
 In `test/offer_test.go` and `test/collection_offer_test.go`: quote all `pricePerUnit`/`minOffer` payload values and expected output amounts; before each `acceptOffer`/`acceptCollectionOffer`, add the seller `setApprovalForAll` `callNft` (as in Task 2 Step 7); assert payment is escrowed at `makeOffer` (token balance of `MarketContractAddress` rose) and refunded on `cancelOffer`.
+
+Also fix the second pre-existing failure, `TestBuyerCannotAcceptOwnOffer` in `test/review2_test.go`: it expected the NFT contract to reject the self-transfer with `"Cannot transfer to self"`, but the marketplace now rejects it earlier via the `caller == buyer` guard in `doAcceptOffer`. Update its `acceptOffer` call's expected-output substring from `"Cannot transfer to self"` to `"Buyer cannot accept own offer"`, quote its `pricePerUnit` to `"1000"`, and change the comment on the failing line to: `// Marketplace rejects self-deal before any NFT transfer`. After this task it must pass.
 
 - [ ] **Step 8: Run offer suites then full**
 
