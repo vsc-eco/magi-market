@@ -1556,7 +1556,7 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract21(in *jlexer.Lexer, out *OfferRes
 		case "amount":
 			out.Amount = uint64(in.Uint64())
 		case "pricePerUnit":
-			out.PricePerUnit = uint64(in.Uint64())
+			out.PricePerUnit = string(in.String())
 		case "paymentToken":
 			out.PaymentToken = string(in.String())
 		case "active":
@@ -1611,7 +1611,7 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract21(out *jwriter.Writer, in OfferRe
 	{
 		const prefix string = ",\"pricePerUnit\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.PricePerUnit))
+		out.String(string(in.PricePerUnit))
 	}
 	{
 		const prefix string = ",\"paymentToken\":"
@@ -1779,7 +1779,7 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract23(in *jlexer.Lexer, out *OfferMad
 		case "amount":
 			out.Amount = uint64(in.Uint64())
 		case "pricePerUnit":
-			out.PricePerUnit = uint64(in.Uint64())
+			out.PricePerUnit = string(in.String())
 		case "paymentToken":
 			out.PaymentToken = string(in.String())
 		case "expirationBlock":
@@ -1828,7 +1828,7 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract23(out *jwriter.Writer, in OfferMa
 	{
 		const prefix string = ",\"pricePerUnit\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.PricePerUnit))
+		out.String(string(in.PricePerUnit))
 	}
 	{
 		const prefix string = ",\"paymentToken\":"
@@ -2198,11 +2198,11 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract28(in *jlexer.Lexer, out *OfferAcc
 		case "amount":
 			out.Amount = uint64(in.Uint64())
 		case "totalPrice":
-			out.TotalPrice = uint64(in.Uint64())
+			out.TotalPrice = string(in.String())
 		case "fee":
-			out.Fee = uint64(in.Uint64())
+			out.Fee = string(in.String())
 		case "royalty":
-			out.Royalty = uint64(in.Uint64())
+			out.Royalty = string(in.String())
 		case "tokenId":
 			out.TokenId = string(in.String())
 		default:
@@ -2242,17 +2242,17 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract28(out *jwriter.Writer, in OfferAc
 	{
 		const prefix string = ",\"totalPrice\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.TotalPrice))
+		out.String(string(in.TotalPrice))
 	}
 	{
 		const prefix string = ",\"fee\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.Fee))
+		out.String(string(in.Fee))
 	}
 	{
 		const prefix string = ",\"royalty\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.Royalty))
+		out.String(string(in.Royalty))
 	}
 	{
 		const prefix string = ",\"tokenId\":"
@@ -2379,7 +2379,7 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract30(in *jlexer.Lexer, out *MakeOffe
 		case "paymentToken":
 			out.PaymentToken = string(in.String())
 		case "pricePerUnit":
-			out.PricePerUnit = uint64(in.Uint64())
+			out.PricePerUnit = string(in.String())
 		case "expirationBlock":
 			out.ExpirationBlock = uint64(in.Uint64())
 		default:
@@ -2419,7 +2419,7 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract30(out *jwriter.Writer, in MakeOff
 	{
 		const prefix string = ",\"pricePerUnit\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.PricePerUnit))
+		out.String(string(in.PricePerUnit))
 	}
 	{
 		const prefix string = ",\"expirationBlock\":"

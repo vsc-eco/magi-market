@@ -19,7 +19,7 @@ func TestMakeCollectionOffer(t *testing.T) {
 	MintAndApproveToken(t, ct, buyer, 50000)
 
 	// Empty tokenId = collection offer
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	result, _, _ := CallMarket(t, ct, "getOffer", []byte(`{"offerId":0}`), nil, "hive:anyone", "", true, gas, "")
@@ -37,7 +37,7 @@ func TestAcceptCollectionOffer(t *testing.T) {
 	MintNft(t, ct, ownerAddress, "42", 5, 100)
 
 	// Make collection offer
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	// Seller accepts with specific tokenId
@@ -58,7 +58,7 @@ func TestAcceptCollectionOfferPartial(t *testing.T) {
 	MintAndApproveToken(t, ct, buyer, 50000)
 	MintNft(t, ct, ownerAddress, "42", 10, 100)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	ApproveNftForMarket(t, ct, ownerAddress)
@@ -79,7 +79,7 @@ func TestAcceptCollectionOfferNoTokenId(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	CallMarket(t, ct, "acceptCollectionOffer", []byte(`{"offerId":0,"tokenId":""}`), nil, ownerAddress, "", false, gas, "Token ID required")
@@ -93,7 +93,7 @@ func TestAcceptTokenOfferAsCollectionOffer(t *testing.T) {
 	MintAndApproveToken(t, ct, buyer, 50000)
 
 	// Token-specific offer (not collection)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	// Trying to accept via acceptCollectionOffer should fail
@@ -108,7 +108,7 @@ func TestAcceptCollectionOfferViaAcceptOffer(t *testing.T) {
 	MintAndApproveToken(t, ct, buyer, 50000)
 
 	// Collection offer
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	// Trying to accept via acceptOffer should fail
@@ -122,7 +122,7 @@ func TestCollectionOfferEvent(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	_, _, logs := CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 	AssertEventContains(t, logs, "offer_made", `"isCollection":true`)
 }

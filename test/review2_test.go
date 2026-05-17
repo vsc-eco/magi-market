@@ -54,12 +54,12 @@ func TestBuyerCannotAcceptOwnOffer(t *testing.T) {
 
 	// Owner makes offer (they're also the NFT holder)
 	MintAndApproveToken(t, ct, ownerAddress, 50000)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, ownerAddress, "", true, gas, "")
 
-	// Owner tries to accept own offer — NFT contract rejects self-transfer
 	ApproveNftForMarket(t, ct, ownerAddress)
-	CallMarket(t, ct, "acceptOffer", []byte(`{"offerId":0}`), nil, ownerAddress, "", false, gas, "Cannot transfer to self")
+	// Marketplace rejects self-deal before any NFT transfer
+	CallMarket(t, ct, "acceptOffer", []byte(`{"offerId":0}`), nil, ownerAddress, "", false, gas, "Buyer cannot accept own offer")
 }
 
 // ===================================

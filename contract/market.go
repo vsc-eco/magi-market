@@ -315,33 +315,31 @@ func MakeOffer(payload *string) *string {
 	if p.NftContract == "" || p.PaymentToken == "" {
 		sdk.Abort("NFT contract and payment token required")
 	}
+
+	price := parseMoney(p.PricePerUnit)
+	if mIsZero(price) {
+		sdk.Abort("Price must be greater than zero")
+	}
 	if p.Amount == 0 {
 		sdk.Abort("Amount must be greater than zero")
 	}
-	if p.PricePerUnit == 0 {
-		sdk.Abort("Price must be greater than zero")
-	}
-
 	assertPaymentTokenAllowed(p.PaymentToken)
 
-	// Check minimum offer threshold
-	totalOffer := safeMul(p.Amount, p.PricePerUnit)
-	minOffer := getMinOffer()
-	if minOffer > 0 && totalOffer < minOffer {
+	totalOffer := mMulU64(price, p.Amount)
+	minOffer := getMoneyState("min_ofr")
+	if !mIsZero(minOffer) && mCmp(totalOffer, minOffer) < 0 {
 		sdk.Abort("Offer below minimum threshold")
 	}
 
-	// Lock current fees and royalties
 	currentFeeBps := getFeeBps()
 	currentRoyaltyBps := getRoyaltyBps(p.NftContract)
-
 	if currentFeeBps+currentRoyaltyBps > 10000 {
 		sdk.Abort("Combined fee and royalty exceed 100%")
 	}
 
-	// Escrow: transfer payment from buyer to marketplace
-	contractAddr := getContractAddress()
-	tokenTransferFrom(p.PaymentToken, caller, contractAddr, totalOffer)
+	// Escrow payment with balance-delta; store the ACTUAL received total so
+	// cancel refunds and accept payouts can never over-distribute.
+	received := escrowIn(p.PaymentToken, caller, totalOffer)
 
 	// Create offer
 	id := getNextOfferId()
@@ -351,7 +349,8 @@ func MakeOffer(payload *string) *string {
 	setOfferField(id, "nc", p.NftContract)
 	setOfferField(id, "ti", p.TokenId)
 	setOfferUint64(id, "a", p.Amount)
-	setOfferUint64(id, "p", p.PricePerUnit)
+	setOfferMoney(id, "p", price)
+	setOfferMoney(id, "esc", received)
 	setOfferField(id, "pt", p.PaymentToken)
 	setOfferField(id, "act", "1")
 	setOfferUint64(id, "exp", p.ExpirationBlock)
@@ -363,7 +362,7 @@ func MakeOffer(payload *string) *string {
 	}
 	setNextOfferId(id + 1)
 
-	emitOfferMade(id, caller, p.NftContract, p.TokenId, p.Amount, p.PricePerUnit, p.PaymentToken, p.ExpirationBlock, isCol)
+	emitOfferMade(id, caller, p.NftContract, p.TokenId, p.Amount, formatMoney(price), p.PaymentToken, p.ExpirationBlock, isCol)
 	return jsonResponse(&CreatedResponse{Success: true, Id: id})
 }
 
@@ -390,23 +389,16 @@ func CancelOffer(payload *string) *string {
 	}
 
 	buyer := getOfferField(p.OfferId, "b")
-
-	// Anyone can cancel an expired offer; only buyer can cancel active ones
 	expBlock := getOfferUint64(p.OfferId, "exp")
 	if !isExpired(expBlock) && caller != buyer {
 		sdk.Abort("Only buyer can cancel offer")
 	}
-
-	// Return escrowed payment to buyer
 	paymentToken := getOfferField(p.OfferId, "pt")
-	amount := getOfferUint64(p.OfferId, "a")
-	pricePerUnit := getOfferUint64(p.OfferId, "p")
-	totalOffer := safeMul(amount, pricePerUnit)
-	tokenTransfer(paymentToken, buyer, totalOffer)
-
-	// Mark inactive
+	refund := getOfferMoney(p.OfferId, "esc")
+	if !mIsZero(refund) {
+		tokenTransferBig(paymentToken, buyer, refund)
+	}
 	setOfferField(p.OfferId, "act", "0")
-
 	emitOfferCancelled(p.OfferId, buyer)
 	return jsonResponse(&SuccessResponse{Success: true})
 }
@@ -416,23 +408,24 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 	if !isOfferActive(offerId) {
 		sdk.Abort("Offer not active")
 	}
-
-	// Check expiration
-	expBlock := getOfferUint64(offerId, "exp")
-	if isExpired(expBlock) {
+	if isExpired(getOfferUint64(offerId, "exp")) {
 		sdk.Abort("Offer has expired")
 	}
 
 	buyer := getOfferField(offerId, "b")
+	if caller == buyer {
+		// Mirrors doBuy's "Seller cannot buy own listing": a self-deal is
+		// economically meaningless and would be a self-transfer on the NFT.
+		sdk.Abort("Buyer cannot accept own offer")
+	}
 	nftContract := getOfferField(offerId, "nc")
 	offerAmount := getOfferUint64(offerId, "a")
-	pricePerUnit := getOfferUint64(offerId, "p")
+	pricePerUnit := getOfferMoney(offerId, "p")
 	paymentToken := getOfferField(offerId, "pt")
 	lockedFeeBps := getOfferUint64(offerId, "fb")
 	lockedRoyaltyBps := getOfferUint64(offerId, "rb")
 	royaltyRecipient := getOfferField(offerId, "rr")
 
-	// Determine accept amount (0 = accept all, for backwards compatibility)
 	if acceptAmount == 0 {
 		acceptAmount = offerAmount
 	}
@@ -440,43 +433,51 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 		sdk.Abort("Accept amount exceeds offer amount")
 	}
 
-	// Verify caller has sufficient NFT balance
-	balance := nftBalanceOf(nftContract, caller, tokenId)
-	if balance < acceptAmount {
+	// Clean preflight instead of a raw cross-call abort.
+	if !nftIsApprovedForAll(nftContract, caller, getContractAddress()) {
+		sdk.Abort("Marketplace not approved as operator to fulfill offer")
+	}
+	if nftBalanceOf(nftContract, caller, tokenId) < acceptAmount {
 		sdk.Abort("Insufficient NFT balance to fulfill offer")
 	}
 
-	totalPrice := safeMul(acceptAmount, pricePerUnit)
-	fee, royalty, sellerPayment := distributeFees(totalPrice, lockedFeeBps, lockedRoyaltyBps)
+	totalPrice := mMulU64(pricePerUnit, acceptAmount)
+	escrowed := getOfferMoney(offerId, "esc")
+	// "esc" is the amount the contract ACTUALLY received at makeOffer time
+	// (balance-delta). For a fee-on-transfer / UTXO deduct_fee payment token,
+	// esc < pricePerUnit*offerAmount, so a full accept (totalPrice =
+	// pricePerUnit*offerAmount) aborts here and only partial accepts up to
+	// `received` worth succeed. This is intentional: the contract only ever
+	// transacts funds it truly holds. The buyer recovers any unaccepted
+	// remainder via cancelOffer (refunded from the residual esc). Sellers
+	// accepting fee-on-transfer-token offers should accept amounts sized to
+	// the received escrow, not the nominal offer amount.
+	if mCmp(totalPrice, escrowed) > 0 {
+		sdk.Abort("Accept exceeds escrowed funds")
+	}
+	fee, royalty, sellerPayment := distributeFeesBig(totalPrice, lockedFeeBps, lockedRoyaltyBps)
 
-	// Transfer NFT from seller (caller) to buyer
 	nftSafeTransferFrom(nftContract, caller, buyer, tokenId, acceptAmount)
 
-	// Transfer escrowed payment minus fee and royalty to seller
-	if sellerPayment > 0 {
-		tokenTransfer(paymentToken, caller, sellerPayment)
+	if !mIsZero(sellerPayment) {
+		tokenTransferBig(paymentToken, caller, sellerPayment)
+	}
+	if !mIsZero(fee) {
+		tokenTransferBig(paymentToken, getFeeRecipient(), fee)
+	}
+	if !mIsZero(royalty) && royaltyRecipient != "" {
+		tokenTransferBig(paymentToken, royaltyRecipient, royalty)
 	}
 
-	// Transfer fee to fee recipient
-	if fee > 0 {
-		feeRecipient := getFeeRecipient()
-		tokenTransfer(paymentToken, feeRecipient, fee)
-	}
-
-	// Transfer royalty to royalty recipient
-	if royalty > 0 && royaltyRecipient != "" {
-		tokenTransfer(paymentToken, royaltyRecipient, royalty)
-	}
-
-	// Update offer - partial or full
 	newRemaining := safeSub(offerAmount, acceptAmount)
+	setOfferMoney(offerId, "esc", mSub(escrowed, totalPrice))
 	if newRemaining == 0 {
 		setOfferField(offerId, "act", "0")
 	} else {
 		setOfferUint64(offerId, "a", newRemaining)
 	}
 
-	emitOfferAccepted(offerId, caller, buyer, acceptAmount, totalPrice, fee, royalty, tokenId)
+	emitOfferAccepted(offerId, caller, buyer, acceptAmount, formatMoney(totalPrice), formatMoney(fee), formatMoney(royalty), tokenId)
 }
 
 //go:wasmexport acceptOffer
@@ -1010,7 +1011,7 @@ func GetOffer(payload *string) *string {
 		NftContract:     getOfferField(p.OfferId, "nc"),
 		TokenId:         getOfferField(p.OfferId, "ti"),
 		Amount:          getOfferUint64(p.OfferId, "a"),
-		PricePerUnit:    getOfferUint64(p.OfferId, "p"),
+		PricePerUnit:    formatMoney(getOfferMoney(p.OfferId, "p")),
 		PaymentToken:    getOfferField(p.OfferId, "pt"),
 		Active:          isOfferActive(p.OfferId),
 		ExpirationBlock: getOfferUint64(p.OfferId, "exp"),

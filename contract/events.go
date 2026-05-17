@@ -77,7 +77,7 @@ func emitListingUpdated(listingId uint64, newPrice string) {
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitOfferMade(offerId uint64, buyer, nftContract, tokenId string, amount, pricePerUnit uint64, paymentToken string, expirationBlock uint64, isCollection bool) {
+func emitOfferMade(offerId uint64, buyer, nftContract, tokenId string, amount uint64, pricePerUnit string, paymentToken string, expirationBlock uint64, isCollection bool) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := OfferMadeEvent{
 		Type: "offer_made",
@@ -105,7 +105,7 @@ func emitOfferCancelled(offerId uint64, buyer string) {
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitOfferAccepted(offerId uint64, seller, buyer string, amount, totalPrice, fee, royalty uint64, tokenId string) {
+func emitOfferAccepted(offerId uint64, seller, buyer string, amount uint64, totalPrice, fee, royalty string, tokenId string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := OfferAcceptedEvent{
 		Type: "offer_accepted",

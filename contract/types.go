@@ -41,7 +41,7 @@ type MakeOfferPayload struct {
 	TokenId         string `json:"tokenId"`
 	Amount          uint64 `json:"amount"`
 	PaymentToken    string `json:"paymentToken"`
-	PricePerUnit    uint64 `json:"pricePerUnit"`
+	PricePerUnit    string `json:"pricePerUnit"`
 	ExpirationBlock uint64 `json:"expirationBlock"`
 }
 
@@ -185,7 +185,7 @@ type OfferResponse struct {
 	NftContract     string `json:"nftContract"`
 	TokenId         string `json:"tokenId"`
 	Amount          uint64 `json:"amount"`
-	PricePerUnit    uint64 `json:"pricePerUnit"`
+	PricePerUnit    string `json:"pricePerUnit"`
 	PaymentToken    string `json:"paymentToken"`
 	Active          bool   `json:"active"`
 	ExpirationBlock uint64 `json:"expirationBlock"`
@@ -328,7 +328,7 @@ type OfferMadeAttributes struct {
 	NftContract     string `json:"nftContract"`
 	TokenId         string `json:"tokenId"`
 	Amount          uint64 `json:"amount"`
-	PricePerUnit    uint64 `json:"pricePerUnit"`
+	PricePerUnit    string `json:"pricePerUnit"`
 	PaymentToken    string `json:"paymentToken"`
 	ExpirationBlock uint64 `json:"expirationBlock"`
 	IsCollection    bool   `json:"isCollection"`
@@ -356,9 +356,9 @@ type OfferAcceptedAttributes struct {
 	Seller     string `json:"seller"`
 	Buyer      string `json:"buyer"`
 	Amount     uint64 `json:"amount"`
-	TotalPrice uint64 `json:"totalPrice"`
-	Fee        uint64 `json:"fee"`
-	Royalty    uint64 `json:"royalty"`
+	TotalPrice string `json:"totalPrice"`
+	Fee        string `json:"fee"`
+	Royalty    string `json:"royalty"`
 	TokenId    string `json:"tokenId"`
 }
 
