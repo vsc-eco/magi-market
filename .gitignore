@@ -1,0 +1,12 @@
+.DS_Store
+.env
+hiveConfig.json
+identityConfig.json
+data/
+artifacts/
+.claude/
+.vscode/
+results.csv
+.config/
+.cache/
+go/
