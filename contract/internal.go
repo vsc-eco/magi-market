@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/big"
 	"magi_market/sdk"
 	"strconv"
 
@@ -507,4 +508,105 @@ func jsonResponse(marshaler interface{ MarshalTinyJSON(*jwriter.Writer) }) *stri
 	marshaler.MarshalTinyJSON(&w)
 	result := string(w.Buffer.BuildBytes())
 	return &result
+}
+
+// ===================================
+// Cross-Contract Helpers (big.Int / approval)
+// ===================================
+
+// jsonBoolField returns true iff "<field>": true appears in s.
+func jsonBoolField(s, field string) bool {
+	key := `"` + field + `":`
+	idx := -1
+	for i := 0; i <= len(s)-len(key); i++ {
+		if s[i:i+len(key)] == key {
+			idx = i + len(key)
+			break
+		}
+	}
+	if idx < 0 {
+		return false
+	}
+	for idx < len(s) && (s[idx] == ' ' || s[idx] == '\t' || s[idx] == '\n') {
+		idx++
+	}
+	return idx+4 <= len(s) && s[idx:idx+4] == "true"
+}
+
+// nftIsApprovedForAll checks operator approval on the NFT contract.
+func nftIsApprovedForAll(nftContract, account, operator string) bool {
+	payload := `{"account":"` + account + `","operator":"` + operator + `"}`
+	result := sdk.ContractCallSimple(nftContract, "isApprovedForAll", payload)
+	if result == nil {
+		return false
+	}
+	return jsonBoolField(*result, "approved")
+}
+
+// tokenBalanceOf reads an ERC-20-style balance as big.Int (string or numeric JSON).
+func tokenBalanceOf(tokenContract, account string) *big.Int {
+	payload := `{"account":"` + account + `"}`
+	result := sdk.ContractCallSimple(tokenContract, "balanceOf", payload)
+	if result == nil {
+		return big.NewInt(0)
+	}
+	s := *result
+	key := `"balance":`
+	idx := -1
+	for i := 0; i <= len(s)-len(key); i++ {
+		if s[i:i+len(key)] == key {
+			idx = i + len(key)
+			break
+		}
+	}
+	if idx < 0 {
+		return big.NewInt(0)
+	}
+	for idx < len(s) && (s[idx] == ' ' || s[idx] == '\t' || s[idx] == '\n') {
+		idx++
+	}
+	if idx < len(s) && s[idx] == '"' {
+		idx++
+	}
+	end := idx
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == idx {
+		return big.NewInt(0)
+	}
+	v, ok := new(big.Int).SetString(s[idx:end], 10)
+	if !ok {
+		return big.NewInt(0)
+	}
+	return v
+}
+
+// escrowIn pulls `requested` from payer into the marketplace and returns the
+// ACTUAL amount received (balance-delta), robust to fee-on-transfer / utxo deduct_fee.
+func escrowIn(paymentToken, payer string, requested *big.Int) *big.Int {
+	contractAddr := getContractAddress()
+	before := tokenBalanceOf(paymentToken, contractAddr)
+	tokenTransferFromBig(paymentToken, payer, contractAddr, requested)
+	after := tokenBalanceOf(paymentToken, contractAddr)
+	received := mSub(after, before)
+	if mIsZero(received) {
+		sdk.Abort("no payment received")
+	}
+	return received
+}
+
+// big.Int variants of the token call helpers (added now, swapped in later tasks).
+func tokenTransferFromBig(tokenContract, from, to string, amount *big.Int) {
+	payload := `{"from":"` + from + `","to":"` + to + `","amount":"` + formatMoney(amount) + `"}`
+	if sdk.ContractCallSimple(tokenContract, "transferFrom", payload) == nil {
+		sdk.Abort("transferFrom call failed")
+	}
+}
+
+func tokenTransferBig(tokenContract, to string, amount *big.Int) {
+	payload := `{"to":"` + to + `","amount":"` + formatMoney(amount) + `"}`
+	if sdk.ContractCallSimple(tokenContract, "transfer", payload) == nil {
+		sdk.Abort("transfer call failed")
+	}
 }
