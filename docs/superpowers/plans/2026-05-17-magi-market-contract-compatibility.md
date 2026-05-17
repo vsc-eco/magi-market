@@ -1000,11 +1000,17 @@ Do NOT run tinyjson (see Build/run invariants). Hand-edit `contract/types_tinyjs
 cd /home/dockeruser/magi/magi-market
 GOTOOLCHAIN=go1.25.3 tinygo build -gc=custom -scheduler=none -panic=trap -no-debug -target=wasm-unknown -o test/artifacts/main.wasm ./contract && echo BUILD_OK
 ```
-Expected: `BUILD_OK`. Then update any failing `minOffer`/`emergencyWithdraw`/token-amount assertions in the review/expiration/royalty test files to quoted strings, and:
+Expected: `BUILD_OK`.
+
+**Task 5 owns the FULL remaining test-suite migration sweep (the documented staged-migration endpoint).** Tasks 2–4 migrated only their own dedicated test files; the cross-cutting files `review_test.go`, `review2_test.go`, `review3_test.go`, `review_fixes_test.go`, `review3_fixes_test.go`, `expiration_test.go`, `royalty_test.go` (and any residual offer/auction cases elsewhere) still send unquoted numeric `pricePerUnit`/`newPrice`/`bidAmount`/`startPrice`/`endPrice`/`minOffer`/emergency-withdraw `amount` and still assert numeric `uint64(...)` on now-string response/event fields, or still assume the old NFT-escrow-on-list/auction-return premise. In this step:
+- Quote every numeric monetary payload value (`pricePerUnit`,`newPrice`,`bidAmount`,`startPrice`,`endPrice`,`minOffer`, emergency-withdraw token `amount`) across ALL still-failing test files.
+- Change every assertion comparing a now-string field (e.g. `listing.PricePerUnit`, bought/offer/auction/settled event amounts) from `uint64(N)` to the quoted string form.
+- Update listing/offer cases that assumed market-held NFT escrow on list to the approval model (seller keeps NFT; approve market as operator via the existing helper; `delist` moves no NFT) — auctions keep escrow, leave those assertions.
+- Iterate file-by-file until the FULL suite is green. Use the enumerated failing-test list as the worklist; nothing may remain red.
 ```bash
 GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 2>&1 | tail -8
 ```
-Expected: `ok  	magi_market/test` (entire suite green).
+Expected: `ok  	magi_market/test` (ENTIRE suite green — 245/245, including the previously-deferred `TestBuyerCannotAcceptOwnOffer` which Task 3's `caller==buyer` guard fixed). If any test is still red, it is Task 5's responsibility to fix here; do not close Task 5 with a red suite.
 
 - [ ] **Step 5: Commit**
 
