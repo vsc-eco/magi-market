@@ -1076,6 +1076,8 @@ GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 -run FeeToken -v 2>&1 | tail -20
 ```
 Expected first run: FAIL only if implementation is wrong; with Tasks 1–5 done correctly it should PASS (balance-delta already distributes `received`). If it FAILS because the seller got `1000`, balance-delta is not wired — fix `doBuy`.
 
+Additionally cover the offer and auction fee-token paths (the Task-4 review's I-1 deferral): in the same `test/feetoken_test.go`, add cases using `contract:feetoken` as the payment token for (i) an offer flow — `makeOffer` then `acceptOffer`, asserting the offer's stored `esc`/payouts reflect the post-fee `received` and a full-amount accept of a fee-shrunk escrow aborts with "Accept exceeds escrowed funds" (documents the underfunded-offer behavior); (ii) an English auction — `createAuction`+`placeBid`+`settleAuction`, asserting the winner/seller settlement distributes the post-fee `received` high bid and a losing bidder is refunded exactly their previously-escrowed `received`; (iii) a Dutch auction immediate-buy where the fee makes `received < totalPrice` — assert it aborts cleanly (no NFT moved, escrow leg reverted) and the buyer is made whole by the full-rollback guarantee. These prove balance-delta + the documented atomicity premise across every fund path, not just buy.
+
 - [ ] **Step 4: Commit**
 
 ```bash
