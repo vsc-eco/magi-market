@@ -478,6 +478,20 @@ func getDutchAuctionCurrentPrice(startPrice, endPrice, startBlock, endBlock, cur
 	return startPrice - priceDrop
 }
 
+func getDutchAuctionCurrentPriceBig(startPrice, endPrice *big.Int, startBlock, endBlock, currentBlock uint64) *big.Int {
+	if currentBlock <= startBlock {
+		return new(big.Int).Set(startPrice)
+	}
+	if currentBlock >= endBlock {
+		return new(big.Int).Set(endPrice)
+	}
+	elapsed := new(big.Int).SetUint64(currentBlock - startBlock)
+	duration := new(big.Int).SetUint64(endBlock - startBlock)
+	drop := new(big.Int).Mul(mSub(startPrice, endPrice), elapsed)
+	drop.Quo(drop, duration)
+	return mSub(startPrice, drop)
+}
+
 // ===================================
 // Fee Distribution Helper
 // ===================================

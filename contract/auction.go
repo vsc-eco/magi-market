@@ -1,10 +1,16 @@
 package main
 
 import (
+	"math/big"
+
 	"magi_market/sdk"
 
 	"github.com/CosmWasm/tinyjson/jlexer"
 )
+
+// Note: getDutchAuctionCurrentPriceBig lives in internal.go alongside the
+// retained uint64 getDutchAuctionCurrentPrice (kept for non-auction callers
+// until Task 5 retires it).
 
 // ===================================
 // Auction Functions
@@ -37,7 +43,8 @@ func CreateAuction(payload *string) *string {
 	if p.AuctionType != "english" && p.AuctionType != "dutch" {
 		sdk.Abort("Auction type must be 'english' or 'dutch'")
 	}
-	if p.StartPrice == 0 {
+	startP := parseMoney(p.StartPrice)
+	if mIsZero(startP) {
 		sdk.Abort("Start price must be greater than zero")
 	}
 	if p.EndBlock == 0 {
@@ -51,8 +58,10 @@ func CreateAuction(payload *string) *string {
 
 	assertPaymentTokenAllowed(p.PaymentToken)
 
+	var endP *big.Int
 	if p.AuctionType == "dutch" {
-		if p.EndPrice >= p.StartPrice {
+		endP = parseMoney(p.EndPrice)
+		if mCmp(endP, startP) >= 0 {
 			sdk.Abort("Dutch auction end price must be less than start price")
 		}
 		if p.StartBlock == 0 {
@@ -63,7 +72,7 @@ func CreateAuction(payload *string) *string {
 		}
 	} else {
 		// English auction: startPrice is the reserve price
-		p.EndPrice = 0
+		endP = mZero()
 		if p.StartBlock == 0 {
 			p.StartBlock = currentBlock
 		}
@@ -93,8 +102,8 @@ func CreateAuction(payload *string) *string {
 	setAuctionUint64(id, "a", p.Amount)
 	setAuctionField(id, "pt", p.PaymentToken)
 	setAuctionField(id, "at", p.AuctionType)
-	setAuctionUint64(id, "sp", p.StartPrice)
-	setAuctionUint64(id, "ep", p.EndPrice)
+	setAuctionMoney(id, "sp", startP)
+	setAuctionMoney(id, "ep", endP)
 	setAuctionUint64(id, "sb", p.StartBlock)
 	setAuctionUint64(id, "eb", p.EndBlock)
 	setAuctionField(id, "act", "1")
@@ -104,7 +113,7 @@ func CreateAuction(payload *string) *string {
 	setAuctionField(id, "rr", getRoyaltyRecipient(p.NftContract))
 	setNextAuctionId(id + 1)
 
-	emitAuctionCreated(id, caller, p.NftContract, p.TokenId, p.Amount, p.AuctionType, p.StartPrice, p.EndPrice, p.StartBlock, p.EndBlock)
+	emitAuctionCreated(id, caller, p.NftContract, p.TokenId, p.Amount, p.AuctionType, formatMoney(startP), formatMoney(endP), p.StartBlock, p.EndBlock)
 	return jsonResponse(&CreatedResponse{Success: true, Id: id})
 }
 
@@ -156,46 +165,55 @@ func PlaceBid(payload *string) *string {
 			sdk.Abort("Auction has ended")
 		}
 
-		startPrice := getAuctionUint64(p.AuctionId, "sp")
 		amount := getAuctionUint64(p.AuctionId, "a")
-		reserveTotal := safeMul(amount, startPrice)
-		currentHighBid := getAuctionUint64(p.AuctionId, "ha")
+		reserveTotal := mMulU64(getAuctionMoney(p.AuctionId, "sp"), amount)
+		currentHighBid := getAuctionMoney(p.AuctionId, "ha")
 
-		if p.BidAmount == 0 {
+		bid := parseMoney(p.BidAmount)
+		if mIsZero(bid) {
 			sdk.Abort("Bid amount must be greater than zero")
 		}
 
 		// Must exceed reserve price (startPrice is per-unit, bidAmount is total)
-		if p.BidAmount < reserveTotal {
+		if mCmp(bid, reserveTotal) < 0 {
 			sdk.Abort("Bid must be at least the reserve price")
 		}
 
 		// Must exceed current high bid
-		if currentHighBid > 0 && p.BidAmount <= currentHighBid {
+		if !mIsZero(currentHighBid) && mCmp(bid, currentHighBid) <= 0 {
 			sdk.Abort("Bid must exceed current high bid")
 		}
 
 		// Enforce minimum bid increment if configured
 		minIncBps := getMinBidIncrementBps()
-		if minIncBps > 0 && currentHighBid > 0 {
-			minBid := safeAdd(currentHighBid, safeMul(currentHighBid, minIncBps)/10000)
-			if p.BidAmount < minBid {
+		if minIncBps > 0 && !mIsZero(currentHighBid) {
+			minBid := mAdd(currentHighBid, mMulBpsDiv(currentHighBid, minIncBps))
+			if mCmp(bid, minBid) < 0 {
 				sdk.Abort("Bid must exceed current high bid by minimum increment")
 			}
 		}
 
-		// Escrow new bid FIRST (before refunding previous bidder)
-		tokenTransferFrom(paymentToken, caller, contractAddr, p.BidAmount)
+		// Escrow new bid FIRST (before refunding previous bidder).
+		// Use balance-delta so fee-on-transfer / utxo deduct_fee tokens
+		// credit only what actually arrived.
+		received := escrowIn(paymentToken, caller, bid)
 
-		// Refund previous high bidder (after new bid is secured)
-		currentHighBidder := getAuctionField(p.AuctionId, "hb")
-		if currentHighBidder != "" && currentHighBid > 0 {
-			tokenTransfer(paymentToken, currentHighBidder, currentHighBid)
+		// Refund previous high bidder (after new bid is secured).
+		// Read the PREVIOUS stored high bid before overwriting it.
+		prevHighBidder := getAuctionField(p.AuctionId, "hb")
+		prevHighBid := currentHighBid
+		if prevHighBidder != "" && !mIsZero(prevHighBid) {
+			tokenTransferBig(paymentToken, prevHighBidder, prevHighBid)
 		}
 
 		// Update auction state
 		setAuctionField(p.AuctionId, "hb", caller)
-		setAuctionUint64(p.AuctionId, "ha", p.BidAmount)
+		// Stored high bid is the ACTUAL escrowed amount (received), not the
+		// nominal bid. Reserve/min-increment guards above intentionally compare
+		// the nominal bid; storing post-fee `received` keeps auction economic
+		// state equal to funds the contract truly holds. Do not "simplify" this
+		// to store the nominal bid.
+		setAuctionMoney(p.AuctionId, "ha", received)
 
 		// Anti-snipe: extend endBlock if bid is placed near the end
 		antiSnipeBlocks := getAntiSnipeBlocks()
@@ -207,7 +225,7 @@ func PlaceBid(payload *string) *string {
 			}
 		}
 
-		emitBidPlaced(p.AuctionId, caller, p.BidAmount)
+		emitBidPlaced(p.AuctionId, caller, formatMoney(received))
 
 	} else {
 		// Dutch auction: bid acts as immediate buy at current price
@@ -215,19 +233,30 @@ func PlaceBid(payload *string) *string {
 			sdk.Abort("Auction has ended")
 		}
 
-		startPrice := getAuctionUint64(p.AuctionId, "sp")
-		endPrice := getAuctionUint64(p.AuctionId, "ep")
-		currentPrice := getDutchAuctionCurrentPrice(startPrice, endPrice, startBlock, endBlock, currentBlock)
+		currentPrice := getDutchAuctionCurrentPriceBig(
+			getAuctionMoney(p.AuctionId, "sp"),
+			getAuctionMoney(p.AuctionId, "ep"),
+			startBlock, endBlock, currentBlock)
 
 		amount := getAuctionUint64(p.AuctionId, "a")
-		totalPrice := safeMul(amount, currentPrice)
+		totalPrice := mMulU64(currentPrice, amount)
 
-		if p.BidAmount < totalPrice {
+		// Preserve the original buyer-declared-bid guard (bid < totalPrice)
+		// in its original position, before any escrow.
+		bid := parseMoney(p.BidAmount)
+		if mCmp(bid, totalPrice) < 0 {
 			sdk.Abort("Bid must be at least the current total price")
 		}
 
-		// Escrow payment
-		tokenTransferFrom(paymentToken, caller, contractAddr, totalPrice)
+		// The buyer is only ever charged totalPrice (the current Dutch price);
+		// the declared bid is used solely as the pre-escrow lower-bound guard
+		// above. Any excess the buyer declared is never pulled.
+		// Escrow payment using balance-delta; require the credited amount
+		// to cover the current total price.
+		received := escrowIn(paymentToken, caller, totalPrice)
+		if mCmp(received, totalPrice) < 0 {
+			sdk.Abort("Bid must be at least the current total price")
+		}
 
 		// Transfer NFT to buyer first (before distributing payments)
 		nftContract := getAuctionField(p.AuctionId, "nc")
@@ -236,7 +265,7 @@ func PlaceBid(payload *string) *string {
 
 		// Mark settled
 		setAuctionField(p.AuctionId, "hb", caller)
-		setAuctionUint64(p.AuctionId, "ha", totalPrice)
+		setAuctionMoney(p.AuctionId, "ha", received)
 		setAuctionField(p.AuctionId, "stl", "1")
 		setAuctionField(p.AuctionId, "act", "0")
 
@@ -245,21 +274,21 @@ func PlaceBid(payload *string) *string {
 		lockedRoyaltyBps := getAuctionUint64(p.AuctionId, "rb")
 		royaltyRecipient := getAuctionField(p.AuctionId, "rr")
 
-		fee, royalty, sellerPayment := distributeFees(totalPrice, lockedFeeBps, lockedRoyaltyBps)
+		fee, royalty, sellerPayment := distributeFeesBig(received, lockedFeeBps, lockedRoyaltyBps)
 
-		if fee > 0 {
+		if !mIsZero(fee) {
 			feeRecipient := getFeeRecipient()
-			tokenTransfer(paymentToken, feeRecipient, fee)
+			tokenTransferBig(paymentToken, feeRecipient, fee)
 		}
-		if royalty > 0 && royaltyRecipient != "" {
-			tokenTransfer(paymentToken, royaltyRecipient, royalty)
+		if !mIsZero(royalty) && royaltyRecipient != "" {
+			tokenTransferBig(paymentToken, royaltyRecipient, royalty)
 		}
-		if sellerPayment > 0 {
-			tokenTransfer(paymentToken, seller, sellerPayment)
+		if !mIsZero(sellerPayment) {
+			tokenTransferBig(paymentToken, seller, sellerPayment)
 		}
 
-		emitBidPlaced(p.AuctionId, caller, totalPrice)
-		emitAuctionSettled(p.AuctionId, caller, totalPrice, fee, royalty)
+		emitBidPlaced(p.AuctionId, caller, formatMoney(received))
+		emitAuctionSettled(p.AuctionId, caller, formatMoney(received), formatMoney(fee), formatMoney(royalty))
 	}
 
 	return jsonResponse(&SuccessResponse{Success: true})
@@ -304,10 +333,10 @@ func SettleAuction(payload *string) *string {
 	amount := getAuctionUint64(p.AuctionId, "a")
 	paymentToken := getAuctionField(p.AuctionId, "pt")
 	highBidder := getAuctionField(p.AuctionId, "hb")
-	highBid := getAuctionUint64(p.AuctionId, "ha")
+	highBid := getAuctionMoney(p.AuctionId, "ha")
 	contractAddr := getContractAddress()
 
-	if highBidder == "" || highBid == 0 {
+	if highBidder == "" || mIsZero(highBid) {
 		// No bids - return NFT to seller
 		nftSafeTransferFrom(nftContract, contractAddr, seller, tokenId, amount)
 
@@ -315,7 +344,7 @@ func SettleAuction(payload *string) *string {
 		setAuctionField(p.AuctionId, "stl", "1")
 		setAuctionField(p.AuctionId, "act", "0")
 
-		emitAuctionSettled(p.AuctionId, "", 0, 0, 0)
+		emitAuctionSettled(p.AuctionId, "", "0", "0", "0")
 	} else {
 		// Transfer NFT to winner first (before distributing payments)
 		nftSafeTransferFrom(nftContract, contractAddr, highBidder, tokenId, amount)
@@ -329,20 +358,20 @@ func SettleAuction(payload *string) *string {
 		lockedRoyaltyBps := getAuctionUint64(p.AuctionId, "rb")
 		royaltyRecipient := getAuctionField(p.AuctionId, "rr")
 
-		fee, royalty, sellerPayment := distributeFees(highBid, lockedFeeBps, lockedRoyaltyBps)
+		fee, royalty, sellerPayment := distributeFeesBig(highBid, lockedFeeBps, lockedRoyaltyBps)
 
-		if fee > 0 {
+		if !mIsZero(fee) {
 			feeRecipient := getFeeRecipient()
-			tokenTransfer(paymentToken, feeRecipient, fee)
+			tokenTransferBig(paymentToken, feeRecipient, fee)
 		}
-		if royalty > 0 && royaltyRecipient != "" {
-			tokenTransfer(paymentToken, royaltyRecipient, royalty)
+		if !mIsZero(royalty) && royaltyRecipient != "" {
+			tokenTransferBig(paymentToken, royaltyRecipient, royalty)
 		}
-		if sellerPayment > 0 {
-			tokenTransfer(paymentToken, seller, sellerPayment)
+		if !mIsZero(sellerPayment) {
+			tokenTransferBig(paymentToken, seller, sellerPayment)
 		}
 
-		emitAuctionSettled(p.AuctionId, highBidder, highBid, fee, royalty)
+		emitAuctionSettled(p.AuctionId, highBidder, formatMoney(highBid), formatMoney(fee), formatMoney(royalty))
 	}
 
 	return jsonResponse(&SuccessResponse{Success: true})
@@ -427,12 +456,12 @@ func GetAuction(payload *string) *string {
 		Amount:       getAuctionUint64(p.AuctionId, "a"),
 		PaymentToken: getAuctionField(p.AuctionId, "pt"),
 		AuctionType:  getAuctionField(p.AuctionId, "at"),
-		StartPrice:   getAuctionUint64(p.AuctionId, "sp"),
-		EndPrice:     getAuctionUint64(p.AuctionId, "ep"),
+		StartPrice:   formatMoney(getAuctionMoney(p.AuctionId, "sp")),
+		EndPrice:     formatMoney(getAuctionMoney(p.AuctionId, "ep")),
 		StartBlock:   getAuctionUint64(p.AuctionId, "sb"),
 		EndBlock:     getAuctionUint64(p.AuctionId, "eb"),
 		HighBidder:   getAuctionField(p.AuctionId, "hb"),
-		HighBid:      getAuctionUint64(p.AuctionId, "ha"),
+		HighBid:      formatMoney(getAuctionMoney(p.AuctionId, "ha")),
 		Active:       isAuctionActive(p.AuctionId),
 		Settled:      isAuctionSettled(p.AuctionId),
 		FeeBps:       getAuctionUint64(p.AuctionId, "fb"),

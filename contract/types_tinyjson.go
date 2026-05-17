@@ -912,7 +912,7 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract12(in *jlexer.Lexer, out *PlaceBid
 		case "auctionId":
 			out.AuctionId = uint64(in.Uint64())
 		case "bidAmount":
-			out.BidAmount = uint64(in.Uint64())
+			out.BidAmount = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -935,7 +935,7 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract12(out *jwriter.Writer, in PlaceBi
 	{
 		const prefix string = ",\"bidAmount\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.BidAmount))
+		out.String(string(in.BidAmount))
 	}
 	out.RawByte('}')
 }
@@ -4232,9 +4232,9 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract52(in *jlexer.Lexer, out *CreateAu
 		case "auctionType":
 			out.AuctionType = string(in.String())
 		case "startPrice":
-			out.StartPrice = uint64(in.Uint64())
+			out.StartPrice = string(in.String())
 		case "endPrice":
-			out.EndPrice = uint64(in.Uint64())
+			out.EndPrice = string(in.String())
 		case "startBlock":
 			out.StartBlock = uint64(in.Uint64())
 		case "endBlock":
@@ -4281,12 +4281,12 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract52(out *jwriter.Writer, in CreateA
 	{
 		const prefix string = ",\"startPrice\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.StartPrice))
+		out.String(string(in.StartPrice))
 	}
 	{
 		const prefix string = ",\"endPrice\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.EndPrice))
+		out.String(string(in.EndPrice))
 	}
 	{
 		const prefix string = ",\"startBlock\":"
@@ -4880,7 +4880,7 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract60(in *jlexer.Lexer, out *BidPlace
 		case "bidder":
 			out.Bidder = string(in.String())
 		case "bidAmount":
-			out.BidAmount = uint64(in.Uint64())
+			out.BidAmount = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -4908,7 +4908,7 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract60(out *jwriter.Writer, in BidPlac
 	{
 		const prefix string = ",\"bidAmount\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.BidAmount))
+		out.String(string(in.BidAmount))
 	}
 	out.RawByte('}')
 }
@@ -5236,11 +5236,11 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract64(in *jlexer.Lexer, out *AuctionS
 		case "winner":
 			out.Winner = string(in.String())
 		case "finalPrice":
-			out.FinalPrice = uint64(in.Uint64())
+			out.FinalPrice = string(in.String())
 		case "fee":
-			out.Fee = uint64(in.Uint64())
+			out.Fee = string(in.String())
 		case "royalty":
-			out.Royalty = uint64(in.Uint64())
+			out.Royalty = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -5268,17 +5268,17 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract64(out *jwriter.Writer, in Auction
 	{
 		const prefix string = ",\"finalPrice\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.FinalPrice))
+		out.String(string(in.FinalPrice))
 	}
 	{
 		const prefix string = ",\"fee\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.Fee))
+		out.String(string(in.Fee))
 	}
 	{
 		const prefix string = ",\"royalty\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.Royalty))
+		out.String(string(in.Royalty))
 	}
 	out.RawByte('}')
 }
@@ -5340,9 +5340,9 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract65(in *jlexer.Lexer, out *AuctionR
 		case "auctionType":
 			out.AuctionType = string(in.String())
 		case "startPrice":
-			out.StartPrice = uint64(in.Uint64())
+			out.StartPrice = string(in.String())
 		case "endPrice":
-			out.EndPrice = uint64(in.Uint64())
+			out.EndPrice = string(in.String())
 		case "startBlock":
 			out.StartBlock = uint64(in.Uint64())
 		case "endBlock":
@@ -5350,7 +5350,7 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract65(in *jlexer.Lexer, out *AuctionR
 		case "highBidder":
 			out.HighBidder = string(in.String())
 		case "highBid":
-			out.HighBid = uint64(in.Uint64())
+			out.HighBid = string(in.String())
 		case "active":
 			out.Active = bool(in.Bool())
 		case "settled":
@@ -5411,12 +5411,12 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract65(out *jwriter.Writer, in Auction
 	{
 		const prefix string = ",\"startPrice\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.StartPrice))
+		out.String(string(in.StartPrice))
 	}
 	{
 		const prefix string = ",\"endPrice\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.EndPrice))
+		out.String(string(in.EndPrice))
 	}
 	{
 		const prefix string = ",\"startBlock\":"
@@ -5436,7 +5436,7 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract65(out *jwriter.Writer, in Auction
 	{
 		const prefix string = ",\"highBid\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.HighBid))
+		out.String(string(in.HighBid))
 	}
 	{
 		const prefix string = ",\"active\":"
@@ -5662,9 +5662,9 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract68(in *jlexer.Lexer, out *AuctionC
 		case "auctionType":
 			out.AuctionType = string(in.String())
 		case "startPrice":
-			out.StartPrice = uint64(in.Uint64())
+			out.StartPrice = string(in.String())
 		case "endPrice":
-			out.EndPrice = uint64(in.Uint64())
+			out.EndPrice = string(in.String())
 		case "startBlock":
 			out.StartBlock = uint64(in.Uint64())
 		case "endBlock":
@@ -5716,12 +5716,12 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract68(out *jwriter.Writer, in Auction
 	{
 		const prefix string = ",\"startPrice\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.StartPrice))
+		out.String(string(in.StartPrice))
 	}
 	{
 		const prefix string = ",\"endPrice\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.EndPrice))
+		out.String(string(in.EndPrice))
 	}
 	{
 		const prefix string = ",\"startBlock\":"

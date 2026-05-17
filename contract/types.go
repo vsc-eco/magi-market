@@ -121,15 +121,15 @@ type CreateAuctionPayload struct {
 	Amount       uint64 `json:"amount"`
 	PaymentToken string `json:"paymentToken"`
 	AuctionType  string `json:"auctionType"`
-	StartPrice   uint64 `json:"startPrice"`
-	EndPrice     uint64 `json:"endPrice"`
+	StartPrice   string `json:"startPrice"`
+	EndPrice     string `json:"endPrice"`
 	StartBlock   uint64 `json:"startBlock"`
 	EndBlock     uint64 `json:"endBlock"`
 }
 
 type PlaceBidPayload struct {
 	AuctionId uint64 `json:"auctionId"`
-	BidAmount uint64 `json:"bidAmount"`
+	BidAmount string `json:"bidAmount"`
 }
 
 type SettleAuctionPayload struct {
@@ -234,12 +234,12 @@ type AuctionResponse struct {
 	Amount       uint64 `json:"amount"`
 	PaymentToken string `json:"paymentToken"`
 	AuctionType  string `json:"auctionType"`
-	StartPrice   uint64 `json:"startPrice"`
-	EndPrice     uint64 `json:"endPrice"`
+	StartPrice   string `json:"startPrice"`
+	EndPrice     string `json:"endPrice"`
 	StartBlock   uint64 `json:"startBlock"`
 	EndBlock     uint64 `json:"endBlock"`
 	HighBidder   string `json:"highBidder"`
-	HighBid      uint64 `json:"highBid"`
+	HighBid      string `json:"highBid"`
 	Active       bool   `json:"active"`
 	Settled      bool   `json:"settled"`
 	FeeBps       uint64 `json:"feeBps"`
@@ -432,8 +432,8 @@ type AuctionCreatedAttributes struct {
 	TokenId     string `json:"tokenId"`
 	Amount      uint64 `json:"amount"`
 	AuctionType string `json:"auctionType"`
-	StartPrice  uint64 `json:"startPrice"`
-	EndPrice    uint64 `json:"endPrice"`
+	StartPrice  string `json:"startPrice"`
+	EndPrice    string `json:"endPrice"`
 	StartBlock  uint64 `json:"startBlock"`
 	EndBlock    uint64 `json:"endBlock"`
 }
@@ -447,7 +447,7 @@ type BidPlacedEvent struct {
 type BidPlacedAttributes struct {
 	AuctionId uint64 `json:"auctionId"`
 	Bidder    string `json:"bidder"`
-	BidAmount uint64 `json:"bidAmount"`
+	BidAmount string `json:"bidAmount"`
 }
 
 type AuctionSettledEvent struct {
@@ -459,9 +459,9 @@ type AuctionSettledEvent struct {
 type AuctionSettledAttributes struct {
 	AuctionId  uint64 `json:"auctionId"`
 	Winner     string `json:"winner"`
-	FinalPrice uint64 `json:"finalPrice"`
-	Fee        uint64 `json:"fee"`
-	Royalty    uint64 `json:"royalty"`
+	FinalPrice string `json:"finalPrice"`
+	Fee        string `json:"fee"`
+	Royalty    string `json:"royalty"`
 }
 
 type AuctionCancelledEvent struct {

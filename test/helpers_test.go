@@ -314,12 +314,12 @@ type AuctionResult struct {
 	Amount       uint64 `json:"amount"`
 	PaymentToken string `json:"paymentToken"`
 	AuctionType  string `json:"auctionType"`
-	StartPrice   uint64 `json:"startPrice"`
-	EndPrice     uint64 `json:"endPrice"`
+	StartPrice   string `json:"startPrice"`
+	EndPrice     string `json:"endPrice"`
 	StartBlock   uint64 `json:"startBlock"`
 	EndBlock     uint64 `json:"endBlock"`
 	HighBidder   string `json:"highBidder"`
-	HighBid      uint64 `json:"highBid"`
+	HighBid      string `json:"highBid"`
 	Active       bool   `json:"active"`
 	Settled      bool   `json:"settled"`
 	FeeBps       uint64 `json:"feeBps"`

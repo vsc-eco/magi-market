@@ -184,7 +184,7 @@ func emitEmergencyWithdraw(tokenType, contract, tokenId string, amount uint64, t
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitAuctionCreated(auctionId uint64, seller, nftContract, tokenId string, amount uint64, auctionType string, startPrice, endPrice, startBlock, endBlock uint64) {
+func emitAuctionCreated(auctionId uint64, seller, nftContract, tokenId string, amount uint64, auctionType string, startPrice, endPrice string, startBlock, endBlock uint64) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := AuctionCreatedEvent{
 		Type: "auction_created",
@@ -200,7 +200,7 @@ func emitAuctionCreated(auctionId uint64, seller, nftContract, tokenId string, a
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitBidPlaced(auctionId uint64, bidder string, bidAmount uint64) {
+func emitBidPlaced(auctionId uint64, bidder string, bidAmount string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BidPlacedEvent{
 		Type:       "bid_placed",
@@ -212,7 +212,7 @@ func emitBidPlaced(auctionId uint64, bidder string, bidAmount uint64) {
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitAuctionSettled(auctionId uint64, winner string, finalPrice, fee, royalty uint64) {
+func emitAuctionSettled(auctionId uint64, winner string, finalPrice, fee, royalty string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := AuctionSettledEvent{
 		Type: "auction_settled",
