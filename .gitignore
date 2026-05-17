@@ -10,3 +10,5 @@ results.csv
 .config/
 .cache/
 go/
+go.work
+go.work.sum

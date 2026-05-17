@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	stateEngine "vsc-node/modules/state-processing"
+	"vsc-node/lib/test_utils"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -431,6 +431,6 @@ func TestBatchBuyEmpty(t *testing.T) {
 // JSON helper
 // ===================================
 
-func parseJSON(result stateEngine.TxResult, v interface{}) {
+func parseJSON(result test_utils.ContractTestCallResult, v interface{}) {
 	json.Unmarshal([]byte(result.Ret), v)
 }

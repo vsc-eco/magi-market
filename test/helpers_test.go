@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"vsc-node/lib/test_utils"
+	contract_session "vsc-node/modules/contract/session"
 	"vsc-node/modules/db/vsc/contracts"
 	stateEngine "vsc-node/modules/state-processing"
 
@@ -71,7 +72,7 @@ func CallMarket(
 	expectedResult bool,
 	maxGas uint,
 	expectedOutput string,
-) (stateEngine.TxResult, uint, map[string][]string) {
+) (test_utils.ContractTestCallResult, uint, map[string]contract_session.LogOutput) {
 	if timestamp == "" {
 		timestamp = defaultTimestamp
 	}
@@ -89,7 +90,7 @@ func CallToken(
 	expectedResult bool,
 	maxGas uint,
 	expectedOutput string,
-) (stateEngine.TxResult, uint, map[string][]string) {
+) (test_utils.ContractTestCallResult, uint, map[string]contract_session.LogOutput) {
 	return callContract(t, ct, TokenID, action, payload, intents, authUser, defaultTimestamp, expectedResult, maxGas, expectedOutput)
 }
 
@@ -104,7 +105,7 @@ func CallNft(
 	expectedResult bool,
 	maxGas uint,
 	expectedOutput string,
-) (stateEngine.TxResult, uint, map[string][]string) {
+) (test_utils.ContractTestCallResult, uint, map[string]contract_session.LogOutput) {
 	return callContract(t, ct, NftContractID, action, payload, intents, authUser, defaultTimestamp, expectedResult, maxGas, expectedOutput)
 }
 
@@ -120,9 +121,9 @@ func callContract(
 	expectedResult bool,
 	maxGas uint,
 	expectedOutput string,
-) (stateEngine.TxResult, uint, map[string][]string) {
+) (test_utils.ContractTestCallResult, uint, map[string]contract_session.LogOutput) {
 	fmt.Printf("[%s] %s %s\n", contractId, action, string(payload))
-	result, gasUsed, logs := ct.Call(stateEngine.TxVscCallContract{
+	cr := ct.Call(stateEngine.TxVscCallContract{
 		Caller: authUser,
 		Self: stateEngine.TxSelf{
 			TxId:                 fmt.Sprintf("%s-%s-tx", contractId, action),
@@ -139,24 +140,24 @@ func callContract(
 		RcLimit:    10000,
 		Intents:    intents,
 	})
+	PrintLogs(cr.Logs)
+	PrintErrorIfFailed(cr)
+	fmt.Printf("return msg: %s\n", cr.Ret)
+	fmt.Printf("RC used: %d\n", cr.RcUsed)
+	fmt.Printf("gas used: %d\n", cr.GasUsed)
 
-	PrintLogs(logs)
-	PrintErrorIfFailed(result)
-	fmt.Printf("return msg: %s\n", result.Ret)
-	fmt.Printf("RC used: %d\n", result.RcUsed)
-	fmt.Printf("gas used: %d\n", gasUsed)
-
-	assert.LessOrEqual(t, gasUsed, maxGas, fmt.Sprintf("Gas %d exceeded limit %d", gasUsed, maxGas))
+	assert.LessOrEqual(t, cr.GasUsed, maxGas, fmt.Sprintf("Gas %d exceeded limit %d", cr.GasUsed, maxGas))
 
 	if expectedResult {
-		assert.True(t, result.Success, "Contract action failed with "+result.Ret)
+		assert.True(t, cr.Success, "Contract action failed with "+cr.Ret)
 	} else {
-		assert.False(t, result.Success, "Contract action did not fail (as expected)")
+		assert.False(t, cr.Success, "Contract action did not fail (as expected)")
 	}
 	if expectedOutput != "" {
-		assert.True(t, strings.Contains(result.Ret, expectedOutput), fmt.Sprintf("Expected output to contain %q but got %q", expectedOutput, result.Ret))
+		combined := cr.Ret + cr.ErrMsg
+		assert.True(t, strings.Contains(combined, expectedOutput), fmt.Sprintf("Expected output to contain %q but got ret=%q errMsg=%q", expectedOutput, cr.Ret, cr.ErrMsg))
 	}
-	return result, gasUsed, logs
+	return cr, cr.GasUsed, cr.Logs
 }
 
 func startsWith(s, prefix string) bool {
@@ -171,17 +172,15 @@ func startsWith(s, prefix string) bool {
 	return true
 }
 
-func PrintLogs(logs map[string][]string) {
-	for key, values := range logs {
-		for _, v := range values {
-			fmt.Printf("[%s] %s\n", key, v)
-		}
+func PrintLogs(logs map[string]contract_session.LogOutput) {
+	for key, v := range logs {
+		fmt.Printf("[%s] %+v\n", key, v)
 	}
 }
 
-func PrintErrorIfFailed(result stateEngine.TxResult) {
+func PrintErrorIfFailed(result test_utils.ContractTestCallResult) {
 	if !result.Success {
-		fmt.Println(result.Err)
+		fmt.Println(result.ErrMsg)
 	}
 }
 
@@ -254,7 +253,7 @@ type ListingResult struct {
 	RoyaltyBps      uint64 `json:"royaltyBps"`
 }
 
-func ParseListing(result stateEngine.TxResult) ListingResult {
+func ParseListing(result test_utils.ContractTestCallResult) ListingResult {
 	var resp ListingResult
 	json.Unmarshal([]byte(result.Ret), &resp)
 	return resp
@@ -275,13 +274,13 @@ type OfferResult struct {
 	IsCollection    bool   `json:"isCollection"`
 }
 
-func ParseOffer(result stateEngine.TxResult) OfferResult {
+func ParseOffer(result test_utils.ContractTestCallResult) OfferResult {
 	var resp OfferResult
 	json.Unmarshal([]byte(result.Ret), &resp)
 	return resp
 }
 
-func ParseOwner(result stateEngine.TxResult) string {
+func ParseOwner(result test_utils.ContractTestCallResult) string {
 	var resp struct {
 		Owner string `json:"owner"`
 	}
@@ -289,7 +288,7 @@ func ParseOwner(result stateEngine.TxResult) string {
 	return resp.Owner
 }
 
-func ParsePaused(result stateEngine.TxResult) bool {
+func ParsePaused(result test_utils.ContractTestCallResult) bool {
 	var resp struct {
 		Paused bool `json:"paused"`
 	}
@@ -327,7 +326,7 @@ type AuctionResult struct {
 	RoyaltyBps   uint64 `json:"royaltyBps"`
 }
 
-func ParseAuction(result stateEngine.TxResult) AuctionResult {
+func ParseAuction(result test_utils.ContractTestCallResult) AuctionResult {
 	var resp AuctionResult
 	json.Unmarshal([]byte(result.Ret), &resp)
 	return resp
@@ -339,13 +338,13 @@ type RoyaltyResult struct {
 	RoyaltyRecipient string `json:"royaltyRecipient"`
 }
 
-func ParseRoyalty(result stateEngine.TxResult) RoyaltyResult {
+func ParseRoyalty(result test_utils.ContractTestCallResult) RoyaltyResult {
 	var resp RoyaltyResult
 	json.Unmarshal([]byte(result.Ret), &resp)
 	return resp
 }
 
-func ParseInfo(result stateEngine.TxResult) InfoResult {
+func ParseInfo(result test_utils.ContractTestCallResult) InfoResult {
 	var resp InfoResult
 	json.Unmarshal([]byte(result.Ret), &resp)
 	return resp
@@ -356,13 +355,13 @@ type CreatedResult struct {
 	Id      uint64 `json:"id"`
 }
 
-func ParseCreated(result stateEngine.TxResult) CreatedResult {
+func ParseCreated(result test_utils.ContractTestCallResult) CreatedResult {
 	var resp CreatedResult
 	json.Unmarshal([]byte(result.Ret), &resp)
 	return resp
 }
 
-func ParseBalance(result stateEngine.TxResult) uint64 {
+func ParseBalance(result test_utils.ContractTestCallResult) uint64 {
 	// Try string balance first (magi_token returns string), then numeric (magi_nft returns uint64)
 	var respStr struct {
 		Balance string `json:"balance"`
@@ -397,10 +396,10 @@ func QueryNftBalance(t *testing.T, ct *test_utils.ContractTest, account, tokenId
 // Event Verification Helpers
 // ===================================
 
-func FindEventsInLogs(logs map[string][]string, eventType string) []string {
+func FindEventsInLogs(logs map[string]contract_session.LogOutput, eventType string) []string {
 	var found []string
-	for _, entries := range logs {
-		for _, entry := range entries {
+	for _, output := range logs {
+		for _, entry := range output.Logs {
 			if strings.Contains(entry, `"type":"`+eventType+`"`) {
 				found = append(found, entry)
 			}
@@ -409,13 +408,13 @@ func FindEventsInLogs(logs map[string][]string, eventType string) []string {
 	return found
 }
 
-func AssertEventEmitted(t *testing.T, logs map[string][]string, eventType string) {
+func AssertEventEmitted(t *testing.T, logs map[string]contract_session.LogOutput, eventType string) {
 	t.Helper()
 	events := FindEventsInLogs(logs, eventType)
 	assert.NotEmpty(t, events, "Expected event '%s' to be emitted", eventType)
 }
 
-func AssertEventContains(t *testing.T, logs map[string][]string, eventType, substring string) {
+func AssertEventContains(t *testing.T, logs map[string]contract_session.LogOutput, eventType, substring string) {
 	t.Helper()
 	events := FindEventsInLogs(logs, eventType)
 	assert.NotEmpty(t, events, "Expected event '%s' to be emitted", eventType)
