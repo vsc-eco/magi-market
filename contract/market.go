@@ -69,37 +69,37 @@ func doList(caller string, p *ListPayload) uint64 {
 	if p.Amount == 0 {
 		sdk.Abort("Amount must be greater than zero")
 	}
-	if p.PricePerUnit == 0 {
+	price := parseMoney(p.PricePerUnit)
+	if mIsZero(price) {
 		sdk.Abort("Price must be greater than zero")
 	}
 
 	assertPaymentTokenAllowed(p.PaymentToken)
 
-	// Check NFT is not soulbound
 	if nftIsSoulbound(p.NftContract, p.TokenId) {
 		sdk.Abort("Cannot list soulbound tokens")
 	}
 
-	// Lock current fees and royalties
 	currentFeeBps := getFeeBps()
 	currentRoyaltyBps := getRoyaltyBps(p.NftContract)
-
-	// Validate combined fees don't exceed 100%
 	if currentFeeBps+currentRoyaltyBps > 10000 {
 		sdk.Abort("Combined fee and royalty exceed 100%")
 	}
 
-	// Escrow: transfer NFT from seller to marketplace
 	contractAddr := getContractAddress()
-	nftSafeTransferFrom(p.NftContract, caller, contractAddr, p.TokenId, p.Amount)
+	if !nftIsApprovedForAll(p.NftContract, caller, contractAddr) {
+		sdk.Abort("Marketplace not approved as operator for this NFT collection")
+	}
+	if nftBalanceOf(p.NftContract, caller, p.TokenId) < p.Amount {
+		sdk.Abort("Insufficient NFT balance to list")
+	}
 
-	// Create listing
 	id := getNextListingId()
 	setListingField(id, "s", caller)
 	setListingField(id, "nc", p.NftContract)
 	setListingField(id, "ti", p.TokenId)
 	setListingUint64(id, "a", p.Amount)
-	setListingUint64(id, "p", p.PricePerUnit)
+	setListingMoney(id, "p", price)
 	setListingField(id, "pt", p.PaymentToken)
 	setListingField(id, "act", "1")
 	setListingUint64(id, "exp", p.ExpirationBlock)
@@ -108,7 +108,7 @@ func doList(caller string, p *ListPayload) uint64 {
 	setListingField(id, "rr", getRoyaltyRecipient(p.NftContract))
 	setNextListingId(id + 1)
 
-	emitListed(id, caller, p.NftContract, p.TokenId, p.Amount, p.PricePerUnit, p.PaymentToken, p.ExpirationBlock)
+	emitListed(id, caller, p.NftContract, p.TokenId, p.Amount, formatMoney(price), p.PaymentToken, p.ExpirationBlock)
 	return id
 }
 
@@ -137,7 +137,8 @@ func List(payload *string) *string {
 //go:wasmexport delist
 func Delist(payload *string) *string {
 	assertInit()
-	// Note: delist works even when paused so sellers can recover escrowed NFTs
+	// Note: delist is intentionally allowed when paused so sellers can
+	// cancel listings freely during a contract pause (no NFT is escrowed).
 
 	caller := getCaller()
 
@@ -161,13 +162,6 @@ func Delist(payload *string) *string {
 		sdk.Abort("Only seller can delist")
 	}
 
-	// Return escrowed NFT to seller
-	nftContract := getListingField(p.ListingId, "nc")
-	tokenId := getListingField(p.ListingId, "ti")
-	amount := getListingUint64(p.ListingId, "a")
-	contractAddr := getContractAddress()
-	nftSafeTransferFrom(nftContract, contractAddr, seller, tokenId, amount)
-
 	// Mark inactive
 	setListingField(p.ListingId, "act", "0")
 
@@ -180,68 +174,57 @@ func doBuy(caller string, p *BuyPayload) {
 	if !isListingActive(p.ListingId) {
 		sdk.Abort("Listing not active")
 	}
-
-	// Check expiration
-	expBlock := getListingUint64(p.ListingId, "exp")
-	if isExpired(expBlock) {
+	if isExpired(getListingUint64(p.ListingId, "exp")) {
 		sdk.Abort("Listing has expired")
 	}
-
 	if p.Amount == 0 {
 		sdk.Abort("Amount must be greater than zero")
 	}
-
 	remaining := getListingUint64(p.ListingId, "a")
 	if p.Amount > remaining {
 		sdk.Abort("Insufficient listing amount")
 	}
 
-	// Read all listing fields before any transfers
 	seller := getListingField(p.ListingId, "s")
 	if caller == seller {
 		sdk.Abort("Seller cannot buy own listing")
 	}
 	paymentToken := getListingField(p.ListingId, "pt")
-	pricePerUnit := getListingUint64(p.ListingId, "p")
+	pricePerUnit := getListingMoney(p.ListingId, "p")
 	nftContract := getListingField(p.ListingId, "nc")
 	tokenId := getListingField(p.ListingId, "ti")
 	lockedFeeBps := getListingUint64(p.ListingId, "fb")
 	lockedRoyaltyBps := getListingUint64(p.ListingId, "rb")
 	royaltyRecipient := getListingField(p.ListingId, "rr")
 
-	totalCost := safeMul(p.Amount, pricePerUnit)
-	fee, royalty, sellerPayment := distributeFees(totalCost, lockedFeeBps, lockedRoyaltyBps)
+	totalCost := mMulU64(pricePerUnit, p.Amount)
 
-	contractAddr := getContractAddress()
+	received := escrowIn(paymentToken, caller, totalCost)
+	// distributeFeesBig: big.Int path; offers/auctions still on uint64 distributeFees until Tasks 3-4.
+	fee, royalty, sellerPayment := distributeFeesBig(received, lockedFeeBps, lockedRoyaltyBps)
 
-	// Transfer payment from buyer to marketplace first
-	tokenTransferFrom(paymentToken, caller, contractAddr, totalCost)
+	// Transfer NFT from seller -> buyer using operator approval. If the seller
+	// moved/burned the NFT or revoked approval, this aborts and the whole tx
+	// (including the escrow leg) reverts — no orphaned funds.
+	nftSafeTransferFrom(nftContract, seller, caller, tokenId, p.Amount)
 
-	// Transfer NFT from marketplace to buyer (before distributing payments,
-	// so if this fails the buyer's payment is still in the marketplace and
-	// can be recovered via emergency withdraw)
-	nftSafeTransferFrom(nftContract, contractAddr, caller, tokenId, p.Amount)
-
-	// Distribute payments
-	if fee > 0 {
-		feeRecipient := getFeeRecipient()
-		tokenTransfer(paymentToken, feeRecipient, fee)
+	if !mIsZero(fee) {
+		tokenTransferBig(paymentToken, getFeeRecipient(), fee)
 	}
-	if royalty > 0 && royaltyRecipient != "" {
-		tokenTransfer(paymentToken, royaltyRecipient, royalty)
+	if !mIsZero(royalty) && royaltyRecipient != "" {
+		tokenTransferBig(paymentToken, royaltyRecipient, royalty)
 	}
-	if sellerPayment > 0 {
-		tokenTransfer(paymentToken, seller, sellerPayment)
+	if !mIsZero(sellerPayment) {
+		tokenTransferBig(paymentToken, seller, sellerPayment)
 	}
 
-	// Update listing
 	newRemaining := safeSub(remaining, p.Amount)
 	if newRemaining == 0 {
 		setListingField(p.ListingId, "act", "0")
 	}
 	setListingUint64(p.ListingId, "a", newRemaining)
 
-	emitBought(p.ListingId, caller, p.Amount, totalCost, fee, royalty)
+	emitBought(p.ListingId, caller, p.Amount, formatMoney(received), formatMoney(fee), formatMoney(royalty))
 }
 
 //go:wasmexport buy
@@ -298,13 +281,12 @@ func UpdateListing(payload *string) *string {
 		sdk.Abort("Only seller can update listing")
 	}
 
-	if p.NewPrice == 0 {
+	newPrice := parseMoney(p.NewPrice)
+	if mIsZero(newPrice) {
 		sdk.Abort("Price must be greater than zero")
 	}
-
-	setListingUint64(p.ListingId, "p", p.NewPrice)
-
-	emitListingUpdated(p.ListingId, p.NewPrice)
+	setListingMoney(p.ListingId, "p", newPrice)
+	emitListingUpdated(p.ListingId, formatMoney(newPrice))
 	return jsonResponse(&SuccessResponse{Success: true})
 }
 
@@ -993,7 +975,7 @@ func GetListing(payload *string) *string {
 		NftContract:     getListingField(p.ListingId, "nc"),
 		TokenId:         getListingField(p.ListingId, "ti"),
 		Amount:          getListingUint64(p.ListingId, "a"),
-		PricePerUnit:    getListingUint64(p.ListingId, "p"),
+		PricePerUnit:    formatMoney(getListingMoney(p.ListingId, "p")),
 		PaymentToken:    getListingField(p.ListingId, "pt"),
 		Active:          isListingActive(p.ListingId),
 		ExpirationBlock: getListingUint64(p.ListingId, "exp"),

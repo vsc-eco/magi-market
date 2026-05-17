@@ -385,12 +385,7 @@ func nftIsSoulbound(nftContract, tokenId string) bool {
 	if result == nil {
 		return false
 	}
-	for i := 0; i < len(*result)-4; i++ {
-		if (*result)[i:i+4] == "true" {
-			return true
-		}
-	}
-	return false
+	return jsonBoolField(*result, "soulbound")
 }
 
 func nftBalanceOf(nftContract, account, tokenId string) uint64 {
@@ -496,6 +491,16 @@ func distributeFees(totalPrice, lockedFeeBps, lockedRoyaltyBps uint64) (uint64, 
 		royalty = safeMul(totalPrice, lockedRoyaltyBps) / 10000
 	}
 	sellerPayment := safeSub(afterFee, royalty)
+	return fee, royalty, sellerPayment
+}
+
+// distributeFeesBig splits totalPrice into (fee, royalty, sellerPayment).
+// big.Int counterpart of distributeFees; the uint64 distributeFees stays
+// until its last caller (offers/auctions) is migrated, then is removed in Task 5.
+func distributeFeesBig(totalPrice *big.Int, lockedFeeBps, lockedRoyaltyBps uint64) (*big.Int, *big.Int, *big.Int) {
+	fee := mMulBpsDiv(totalPrice, lockedFeeBps)
+	royalty := mMulBpsDiv(totalPrice, lockedRoyaltyBps)
+	sellerPayment := mSub(mSub(totalPrice, fee), royalty)
 	return fee, royalty, sellerPayment
 }
 

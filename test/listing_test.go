@@ -23,7 +23,7 @@ func TestListNft(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 
 	// List 5 NFTs at price 1000 each
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	_, _, logs := CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 	AssertEventEmitted(t, logs, "listed")
 	AssertEventContains(t, logs, "listed", `"listingId":0`)
@@ -36,13 +36,13 @@ func TestListNft(t *testing.T) {
 	assert.Equal(t, NftContractID, listing.NftContract)
 	assert.Equal(t, "1", listing.TokenId)
 	assert.Equal(t, uint64(5), listing.Amount)
-	assert.Equal(t, uint64(1000), listing.PricePerUnit)
+	assert.Equal(t, "1000", listing.PricePerUnit)
 	assert.Equal(t, TokenID, listing.PaymentToken)
 	assert.True(t, listing.Active)
 
-	// Verify NFT was escrowed (marketplace has 5, seller has 5)
-	assert.Equal(t, uint64(5), QueryNftBalance(t, ct, MarketContractAddress, "1"))
-	assert.Equal(t, uint64(5), QueryNftBalance(t, ct, seller, "1"))
+	// NFT is not escrowed: seller retains full balance after listing
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, MarketContractAddress, "1"))
+	assert.Equal(t, uint64(10), QueryNftBalance(t, ct, seller, "1"))
 }
 
 func TestListMultipleNfts(t *testing.T) {
@@ -55,11 +55,11 @@ func TestListMultipleNfts(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 
 	// List token 1
-	payload1 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":3,"paymentToken":"%s","pricePerUnit":500}`, NftContractID, TokenID)
+	payload1 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":3,"paymentToken":"%s","pricePerUnit":"500"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload1), nil, seller, "", true, gas, "")
 
 	// List token 2
-	payload2 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"2","amount":2,"paymentToken":"%s","pricePerUnit":2000}`, NftContractID, TokenID)
+	payload2 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"2","amount":2,"paymentToken":"%s","pricePerUnit":"2000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload2), nil, seller, "", true, gas, "")
 
 	// Verify both listings exist
@@ -78,7 +78,7 @@ func TestListZeroAmount(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":0,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":0,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, ownerAddress, "", false, gas, "Amount must be greater than zero")
 }
 
@@ -89,7 +89,7 @@ func TestListZeroPrice(t *testing.T) {
 	MintNft(t, ct, ownerAddress, "1", 10, 100)
 	ApproveNftForMarket(t, ct, ownerAddress)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":0}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"0"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, ownerAddress, "", false, gas, "Price must be greater than zero")
 }
 
@@ -98,13 +98,13 @@ func TestListMissingFields(t *testing.T) {
 	InitFullSetup(t, ct)
 
 	// Missing nftContract
-	CallMarket(t, ct, "list", []byte(fmt.Sprintf(`{"nftContract":"","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, TokenID)), nil, ownerAddress, "", false, gas, "NFT contract, token ID, and payment token required")
+	CallMarket(t, ct, "list", []byte(fmt.Sprintf(`{"nftContract":"","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, TokenID)), nil, ownerAddress, "", false, gas, "NFT contract, token ID, and payment token required")
 
 	// Missing tokenId
-	CallMarket(t, ct, "list", []byte(fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)), nil, ownerAddress, "", false, gas, "NFT contract, token ID, and payment token required")
+	CallMarket(t, ct, "list", []byte(fmt.Sprintf(`{"nftContract":"%s","tokenId":"","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)), nil, ownerAddress, "", false, gas, "NFT contract, token ID, and payment token required")
 
 	// Missing paymentToken
-	CallMarket(t, ct, "list", []byte(fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"","pricePerUnit":1000}`, NftContractID)), nil, ownerAddress, "", false, gas, "NFT contract, token ID, and payment token required")
+	CallMarket(t, ct, "list", []byte(fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"","pricePerUnit":"1000"}`, NftContractID)), nil, ownerAddress, "", false, gas, "NFT contract, token ID, and payment token required")
 }
 
 func TestListWhenPaused(t *testing.T) {
@@ -113,7 +113,7 @@ func TestListWhenPaused(t *testing.T) {
 
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, ownerAddress, "", false, gas, "Contract is paused")
 }
 
@@ -130,7 +130,7 @@ func TestDelistNft(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 
 	// List
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Delist
@@ -142,7 +142,7 @@ func TestDelistNft(t *testing.T) {
 	listing := ParseListing(result)
 	assert.False(t, listing.Active)
 
-	// Verify NFT returned to seller
+	// Delist moves no NFTs: seller keeps full balance, market holds none
 	assert.Equal(t, uint64(10), QueryNftBalance(t, ct, seller, "1"))
 	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, MarketContractAddress, "1"))
 }
@@ -155,7 +155,7 @@ func TestDelistNotSeller(t *testing.T) {
 	MintNft(t, ct, seller, "1", 10, 100)
 	ApproveNftForMarket(t, ct, seller)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Try to delist as different user
@@ -170,7 +170,7 @@ func TestDelistInactiveListing(t *testing.T) {
 	MintNft(t, ct, seller, "1", 10, 100)
 	ApproveNftForMarket(t, ct, seller)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Delist once
@@ -194,7 +194,7 @@ func TestBuyFullListing(t *testing.T) {
 	// Mint NFT to seller, list it
 	MintNft(t, ct, seller, "1", 5, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Mint payment tokens to buyer (5 * 1000 = 5000)
@@ -228,7 +228,7 @@ func TestBuyPartialListing(t *testing.T) {
 
 	MintNft(t, ct, seller, "1", 10, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":10,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":10,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Buy only 3 out of 10
@@ -255,7 +255,7 @@ func TestBuyMultiplePartialFills(t *testing.T) {
 
 	MintNft(t, ct, seller, "1", 10, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":10,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":10,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Buyer 1 buys 4
@@ -286,7 +286,7 @@ func TestBuyExceedsListingAmount(t *testing.T) {
 
 	MintNft(t, ct, seller, "1", 5, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	MintAndApproveToken(t, ct, buyer, 10000)
@@ -300,7 +300,7 @@ func TestBuyZeroAmount(t *testing.T) {
 	seller := ownerAddress
 	MintNft(t, ct, seller, "1", 5, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	CallMarket(t, ct, "buy", []byte(`{"listingId":0,"amount":0}`), nil, "hive:buyer", "", false, gas, "Amount must be greater than zero")
@@ -313,7 +313,7 @@ func TestBuyInactiveListing(t *testing.T) {
 	seller := ownerAddress
 	MintNft(t, ct, seller, "1", 5, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Delist
@@ -330,7 +330,7 @@ func TestBuyWhenPaused(t *testing.T) {
 	seller := ownerAddress
 	MintNft(t, ct, seller, "1", 5, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
@@ -355,7 +355,7 @@ func TestBuyWithZeroFee(t *testing.T) {
 
 	MintNft(t, ct, seller, "1", 5, 100)
 	ApproveNftForMarket(t, ct, seller)
-	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(listPayload), nil, seller, "", true, gas, "")
 
 	MintAndApproveToken(t, ct, buyer, 5000)
@@ -375,7 +375,7 @@ func TestBuyFeeCalculation(t *testing.T) {
 
 	MintNft(t, ct, seller, "1", 1, 1)
 	ApproveNftForMarket(t, ct, seller)
-	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","pricePerUnit":10000}`, NftContractID, TokenID)
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","pricePerUnit":"10000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(listPayload), nil, seller, "", true, gas, "")
 
 	MintAndApproveToken(t, ct, buyer, 10000)
@@ -397,17 +397,17 @@ func TestUpdateListing(t *testing.T) {
 	seller := ownerAddress
 	MintNft(t, ct, seller, "1", 5, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Update price
-	_, _, logs := CallMarket(t, ct, "updateListing", []byte(`{"listingId":0,"newPrice":2000}`), nil, seller, "", true, gas, "")
+	_, _, logs := CallMarket(t, ct, "updateListing", []byte(`{"listingId":0,"newPrice":"2000"}`), nil, seller, "", true, gas, "")
 	AssertEventEmitted(t, logs, "listing_updated")
 
 	// Verify
 	result, _, _ := CallMarket(t, ct, "getListing", []byte(`{"listingId":0}`), nil, "hive:anyone", "", true, gas, "")
 	listing := ParseListing(result)
-	assert.Equal(t, uint64(2000), listing.PricePerUnit)
+	assert.Equal(t, "2000", listing.PricePerUnit)
 }
 
 func TestUpdateListingNotSeller(t *testing.T) {
@@ -417,10 +417,10 @@ func TestUpdateListingNotSeller(t *testing.T) {
 	seller := ownerAddress
 	MintNft(t, ct, seller, "1", 5, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
-	CallMarket(t, ct, "updateListing", []byte(`{"listingId":0,"newPrice":2000}`), nil, "hive:alice", "", false, gas, "Only seller can update listing")
+	CallMarket(t, ct, "updateListing", []byte(`{"listingId":0,"newPrice":"2000"}`), nil, "hive:alice", "", false, gas, "Only seller can update listing")
 }
 
 func TestUpdateListingZeroPrice(t *testing.T) {
@@ -430,10 +430,10 @@ func TestUpdateListingZeroPrice(t *testing.T) {
 	seller := ownerAddress
 	MintNft(t, ct, seller, "1", 5, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
-	CallMarket(t, ct, "updateListing", []byte(`{"listingId":0,"newPrice":0}`), nil, seller, "", false, gas, "Price must be greater than zero")
+	CallMarket(t, ct, "updateListing", []byte(`{"listingId":0,"newPrice":"0"}`), nil, seller, "", false, gas, "Price must be greater than zero")
 }
 
 func TestUpdateListingInactive(t *testing.T) {
@@ -443,14 +443,14 @@ func TestUpdateListingInactive(t *testing.T) {
 	seller := ownerAddress
 	MintNft(t, ct, seller, "1", 5, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Delist first
 	CallMarket(t, ct, "delist", []byte(`{"listingId":0}`), nil, seller, "", true, gas, "")
 
 	// Try to update
-	CallMarket(t, ct, "updateListing", []byte(`{"listingId":0,"newPrice":2000}`), nil, seller, "", false, gas, "Listing not active")
+	CallMarket(t, ct, "updateListing", []byte(`{"listingId":0,"newPrice":"2000"}`), nil, seller, "", false, gas, "Listing not active")
 }
 
 func TestBuyAfterPriceUpdate(t *testing.T) {
@@ -462,11 +462,11 @@ func TestBuyAfterPriceUpdate(t *testing.T) {
 
 	MintNft(t, ct, seller, "1", 5, 100)
 	ApproveNftForMarket(t, ct, seller)
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Update price to 2000
-	CallMarket(t, ct, "updateListing", []byte(`{"listingId":0,"newPrice":2000}`), nil, seller, "", true, gas, "")
+	CallMarket(t, ct, "updateListing", []byte(`{"listingId":0,"newPrice":"2000"}`), nil, seller, "", true, gas, "")
 
 	// Buy 2 at new price: 2 * 2000 = 4000
 	MintAndApproveToken(t, ct, buyer, 4000)

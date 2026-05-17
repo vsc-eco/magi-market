@@ -22,7 +22,7 @@ func emitInit(owner string, feeBps uint64, feeRecipient string) {
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitListed(listingId uint64, seller, nftContract, tokenId string, amount, pricePerUnit uint64, paymentToken string, expirationBlock uint64) {
+func emitListed(listingId uint64, seller, nftContract, tokenId string, amount uint64, pricePerUnit string, paymentToken string, expirationBlock uint64) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := ListedEvent{
 		Type: "listed",
@@ -50,7 +50,7 @@ func emitDelisted(listingId uint64, seller string) {
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitBought(listingId uint64, buyer string, amount, totalPrice, fee, royalty uint64) {
+func emitBought(listingId uint64, buyer string, amount uint64, totalPrice, fee, royalty string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BoughtEvent{
 		Type: "bought",
@@ -65,7 +65,7 @@ func emitBought(listingId uint64, buyer string, amount, totalPrice, fee, royalty
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitListingUpdated(listingId uint64, newPrice uint64) {
+func emitListingUpdated(listingId uint64, newPrice string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := ListingUpdatedEvent{
 		Type:       "listing_updated",

@@ -245,7 +245,7 @@ type ListingResult struct {
 	NftContract     string `json:"nftContract"`
 	TokenId         string `json:"tokenId"`
 	Amount          uint64 `json:"amount"`
-	PricePerUnit    uint64 `json:"pricePerUnit"`
+	PricePerUnit    string `json:"pricePerUnit"`
 	PaymentToken    string `json:"paymentToken"`
 	Active          bool   `json:"active"`
 	ExpirationBlock uint64 `json:"expirationBlock"`
