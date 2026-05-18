@@ -1118,6 +1118,156 @@ git commit -m "docs: record UTXO mapping payment-token wire-compat verification"
 
 ---
 
+## Task 7: Raw cross-contract state reads for all getters (resolves UTXO blocker)
+
+**Why:** The utxo-mapping contract has no `balanceOf`, so the method-call-based `tokenBalanceOf` aborts every UTXO-paid flow. User decision: convert ALL five cross-contract getters from `contracts.call` to raw `sdk.ContractStateGet` (`contracts.read`), mirroring each target contract's exact internal key + byte encoding (see spec "Resolution: raw cross-contract state reads"). This makes UTXO payment work and lowers RC, at the accepted cost of coupling to those contracts' internal storage (risk recorded in spec).
+
+**Files:**
+- Modify: `contract/internal.go` (rewrite the 5 getters + add 3 decoders; add `encoding/binary` import), `test/mocks/feetoken/contract/main.go` (realign storage to magi_token's `big.Int.Bytes()` under `bal|<acct>`), `test/helpers_test.go` (register utxo mock)
+- Create: `test/mocks/utxomock/{go.mod,contract/main.go,runtime/gc_leaking_exported.go,sdk/sdk.go}`, `test/utxopay_test.go`
+- Modify: `docs/...spec` already updated (no action).
+
+- [ ] **Step 1: Add raw-state decoders + rewrite getters in `contract/internal.go`**
+
+Add `"encoding/binary"` to the import block. Add these decoders (comments cite the exact source mirrored):
+```go
+// decodeNftU64 mirrors magi_nft-contract bytesToU64 (commit 223c728,
+// contract/internal.go): little-endian uint64, trailing zero bytes trimmed;
+// absent/empty => 0.
+func decodeNftU64(s *string) uint64 {
+	if s == nil || *s == "" {
+		return 0
+	}
+	b := []byte(*s)
+	if len(b) > 8 {
+		sdk.Abort("nft balance bytes >8")
+	}
+	var buf [8]byte
+	copy(buf[:], b) // LE: stored bytes are least-significant, at the start
+	return binary.LittleEndian.Uint64(buf[:])
+}
+
+// decodeTokenBig mirrors magi_token-contract bytesToBigInt (commit a819106):
+// big.Int.Bytes() == big-endian unsigned magnitude; absent/empty => 0.
+func decodeTokenBig(s *string) *big.Int {
+	if s == nil || *s == "" {
+		return big.NewInt(0)
+	}
+	return new(big.Int).SetBytes([]byte(*s))
+}
+
+// decodeUtxoU64 mirrors utxo-mapping getAccBal (commit 6039c43,
+// contract/mapping/utils.go): big-endian uint64, leading zero bytes trimmed;
+// absent/empty => 0.
+func decodeUtxoU64(s *string) uint64 {
+	if s == nil || *s == "" {
+		return 0
+	}
+	b := []byte(*s)
+	if len(b) > 8 {
+		sdk.Abort("utxo balance bytes >8")
+	}
+	var buf [8]byte
+	copy(buf[8-len(b):], b) // BE: right-align
+	return binary.BigEndian.Uint64(buf[:])
+}
+```
+Rewrite the five getters (replace their `sdk.ContractCallSimple` bodies; keep signatures identical so call sites are untouched):
+```go
+func nftBalanceOf(nftContract, account, tokenId string) uint64 {
+	return decodeNftU64(sdk.ContractStateGet(nftContract, "bal|"+account+"|"+tokenId))
+}
+
+func nftIsApprovedForAll(nftContract, account, operator string) bool {
+	v := sdk.ContractStateGet(nftContract, "op|"+account+"|"+operator)
+	return v != nil && *v == "1"
+}
+
+func nftIsSoulbound(nftContract, tokenId string) bool {
+	v := sdk.ContractStateGet(nftContract, "sb|"+tokenId)
+	return v != nil && *v == "1"
+}
+
+func nftGetOwner(nftContract string) string {
+	v := sdk.ContractStateGet(nftContract, "owner")
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+// tokenBalanceOf: probe magi_token/fee-mock key first, then utxo key.
+// Disjoint prefixes; each contract writes only its own ⇒ unambiguous.
+func tokenBalanceOf(tokenContract, account string) *big.Int {
+	if v := sdk.ContractStateGet(tokenContract, "bal|"+account); v != nil && *v != "" {
+		return decodeTokenBig(v)
+	}
+	if v := sdk.ContractStateGet(tokenContract, "a-"+account); v != nil && *v != "" {
+		return new(big.Int).SetUint64(decodeUtxoU64(v))
+	}
+	return big.NewInt(0)
+}
+```
+Delete the now-unused `jsonBoolField` ONLY if it has no remaining callers (`grep -n 'jsonBoolField(' contract/*.go`); if anything else uses it, keep it. The old method-call helper bodies are fully replaced. `escrowIn` and all call sites are unchanged (same signatures).
+
+- [ ] **Step 2: Build + full suite (regression oracle for nft/token decoders + mid-tx visibility)**
+
+```bash
+cd /home/dockeruser/magi/magi-market
+GOTOOLCHAIN=go1.25.3 tinygo build -gc=custom -scheduler=none -panic=trap -no-debug -target=wasm-unknown -o test/artifacts/main.wasm ./contract && echo BUILD_OK
+GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 2>&1 | tail -3
+```
+Expected `BUILD_OK`. The suite uses the REAL `nft.wasm`/`token.wasm` through balance-delta everywhere, so it must stay green (245 base) — this proves `decodeNftU64`/`decodeTokenBig` are byte-correct AND that raw `contracts.read` reflects a just-applied `transferFrom` write within the same call (mid-tx visibility). If balance-delta tests fail, a decoder or the visibility assumption is wrong — STOP and report (do not weaken tests).
+
+- [ ] **Step 3: Realign the fee-token mock storage to magi_token encoding**
+
+In `test/mocks/feetoken/contract/main.go`, the mock currently stores balances as a decimal string (`amount.String()`). magi-market now raw-reads `bal|<acct>` expecting `big.Int.Bytes()`. Change `setBal` to store `string(<bigIntToBytes>(amount))` and `getBal` to `new(big.Int).SetBytes([]byte(*v))`, mirroring magi_token exactly:
+```go
+func bigIntToBytes(v *big.Int) []byte { b := v.Bytes(); if len(b) == 0 { return []byte{0} }; return b }
+func getBal(account string) *big.Int {
+	v := sdk.StateGetObject(balKey(account))
+	if v == nil || *v == "" { return big.NewInt(0) }
+	return new(big.Int).SetBytes([]byte(*v))
+}
+func setBal(account string, amount *big.Int) { sdk.StateSetObject(balKey(account), string(bigIntToBytes(amount))) }
+```
+Keep the `balanceOf` JSON entrypoint (harmless; magi-market no longer calls it but the test's own `QueryFeeTokenBalance` helper may — if that helper calls the contract method it still works; if it raw-reads, update it consistently). Rebuild the mock:
+```bash
+cd /home/dockeruser/magi/magi-market/test/mocks/feetoken
+GOWORK=off GOTOOLCHAIN=go1.25.3 tinygo build -gc=custom -scheduler=none -panic=trap -no-debug -target=wasm-unknown -o /home/dockeruser/magi/magi-market/test/artifacts/feetoken.wasm ./contract && echo FEETOKEN_OK
+```
+Re-run `-run FeeToken`: all 4 cases must still PASS (now exercising the raw-read `tokenBalanceOf` against magi_token-format mock state — this is the fee-on-transfer proof through the new code path).
+
+- [ ] **Step 4: UTXO-style mock + end-to-end UTXO payment test**
+
+Create `test/mocks/utxomock/` (same module/sdk/runtime scaffold as feetoken; `GOWORK=off` for builds). `contract/main.go`, package main, hand-rolled JSON, NO `balanceOf`. Mirrors utxo-mapping storage: balances under `"a-"+acct`, value = big-endian uint64 with leading zero bytes trimmed (copy utxo-mapping `setAccBal`/`getAccBal` byte logic exactly: `v:=uint64(bal); n:=(bits.Len64(v)+7)/8; binary.BigEndian.PutUint64(buf[:],v); store string(buf[8-n:])`). Entrypoints: `init`, `mint {to,amount}` (credit; amount decimal string → int64), `transfer {to,amount}` / `transferFrom {from,to,amount}` applying a 1% deduct-style fee (debit full, credit `amount-fee`), returning bare `"0"` like real utxo. Amounts int64 satoshis. Build to `test/artifacts/utxomock.wasm` (gitignored). Register in `test/helpers_test.go` (`//go:embed`, `const UtxoMockID = "utxomock"`, `ct.RegisterContract(UtxoMockID, ownerAddress, UtxoMockWasm)`).
+Create `test/utxopay_test.go`: market `feeBps:0`, `addPaymentToken {"token":"contract:utxomock"}`, mint utxomock to buyer; prove BUY, OFFER (makeOffer→acceptOffer happy path with post-fee `esc`), and an English AUCTION all work end-to-end with `contract:utxomock` as payment — i.e. `escrowIn` now reads the utxo balance via the raw `a-<acct>` path, `received` is the post-fee amount, distribution uses `received`. Assertions on real on-ledger balances + events (meaningful, not vacuous). Run `-run 'UtxoPay'` → PASS, then full suite green.
+
+- [ ] **Step 5: Build, full suite, commit**
+
+```bash
+cd /home/dockeruser/magi/magi-market
+GOTOOLCHAIN=go1.25.3 tinygo build -gc=custom -scheduler=none -panic=trap -no-debug -target=wasm-unknown -o test/artifacts/main.wasm ./contract && echo BUILD_OK
+GOTOOLCHAIN=go1.25.3 go test ./test/ -count=1 2>&1 | tail -3
+git branch --show-current   # feature/latest-contract-utxo-compat
+git add contract/internal.go test/mocks/feetoken test/mocks/utxomock test/helpers_test.go test/utxopay_test.go test/feetoken_test.go
+git commit -m "feat: raw cross-contract state reads for all getters; UTXO payment works
+
+- nftBalanceOf/nftIsApprovedForAll/nftIsSoulbound/nftGetOwner and
+  tokenBalanceOf now use sdk.ContractStateGet (contracts.read) with
+  decoders mirroring magi_nft (LE-u64), magi_token (big.Int bytes),
+  utxo-mapping (BE-u64) internal encodings
+- resolves the utxo-mapping no-balanceOf blocker: UTXO-mapped coins
+  usable as payment (buy/offer/auction proven via utxomock)
+- fee-token mock realigned to magi_token byte storage; balance-delta
+  + mid-tx read-visibility proven by the full suite staying green"
+git rev-parse feature/latest-contract-utxo-compat   # == HEAD
+git show --stat HEAD | tail -6
+```
+Expected: `BUILD_OK`, full suite `ok` (245 + FeeToken + UtxoPay, all green), on-branch ref==HEAD.
+
+---
+
 ## Self-Review (performed during planning)
 
 **Spec coverage:**

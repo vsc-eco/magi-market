@@ -261,3 +261,44 @@ out of scope here and must not be done as a magi-market-side adapter.
 (Prior item — tinygo `wasm-unknown` size/gas budget after adding
 `math/big` — is already proven: the fee-on-transfer mock and the live
 magi-market `main.wasm` both build and the full 249-test suite passes.)
+
+## Resolution: raw cross-contract state reads for ALL getters (2026-05-18, user-decided)
+
+The `balanceOf` blocker is resolved by switching magi-market's cross-contract
+reads from method calls (`contracts.call`) to raw state reads
+(`sdk.ContractStateGet` = `contracts.read`). The user explicitly chose to
+convert **all five** getters (not just balances), accepting the coupling
+tradeoff below. Implemented as Task 7.
+
+**Converted getters and the exact target encodings (verified from source):**
+
+| getter | contract | state key | value encoding |
+|---|---|---|---|
+| `nftIsSoulbound` | magi_nft | `sb\|<id>` | `"1"` ⇒ true; absent/other ⇒ false |
+| `nftIsApprovedForAll` | magi_nft | `op\|<owner>\|<operator>` | `"1"` ⇒ true; `"0"`/absent ⇒ false |
+| `nftGetOwner` | magi_nft | `owner` | address string (absent ⇒ "") |
+| `nftBalanceOf` | magi_nft | `bal\|<acct>\|<id>` | **little-endian** uint64, trailing-zero-trimmed; absent ⇒ 0 |
+| `tokenBalanceOf` | magi_token / mock | `bal\|<acct>` | `big.Int.Bytes()` (**big-endian** unsigned magnitude); absent ⇒ 0 |
+| `tokenBalanceOf` | utxo-mapping | `a-<acct>` | **big-endian** uint64, leading-zero-trimmed; absent ⇒ 0 |
+
+`tokenBalanceOf` probes `bal|<acct>` first (magi_token / fee mock); if
+absent it probes `a-<acct>` (utxo). The two key prefixes are disjoint and
+each contract writes only its own, so the probe order is unambiguous
+(both-absent ⇒ 0, correct either way).
+
+**Accepted risk (recorded so it is a deliberate, visible tradeoff).**
+This hardcodes the *internal* state-key schemes and byte encodings of three
+independently-versioned contracts (magi_nft, magi_token, utxo-mapping) into
+magi-market. If any of them changes its internal storage layout, magi-market
+will silently read wrong values (no compile error) — and for the balance
+reads that is a fund-safety bug. This trades the stability of those
+contracts' method ABIs for lower RC/gas and UTXO compatibility. Mitigation:
+the codecs are centralized in clearly-commented helpers citing the exact
+source file/commit they mirror; the full wasm suite (which round-trips real
+`magi_token`/`magi_nft` wasm through balance-delta) is the regression oracle
+that would catch an encoding drift; a dedicated UTXO-style mock proves the
+`a-<acct>` path end-to-end. **Mid-transaction visibility** (balance-delta
+reads balance before and after a `transferFrom` within one marketplace call)
+is validated by the existing balance-delta suite remaining green after the
+switch — if `contracts.read` did not reflect the just-applied cross-contract
+write, those tests would fail.
