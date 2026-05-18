@@ -46,7 +46,7 @@ func TestBuyBeforeInit(t *testing.T) {
 
 func TestMakeOfferBeforeInit(t *testing.T) {
 	ct := SetupContractTest()
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, "hive:buyer", "", false, gas, "")
 }
 
@@ -211,7 +211,7 @@ func TestCancelOfferWhenPaused(t *testing.T) {
 	MintNft(t, ct, ownerAddress, "1", 10, 100)
 	MintAndApproveToken(t, ct, buyer, 5000)
 
-	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", true, gas, "")
 
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
@@ -351,7 +351,7 @@ func TestE2EOfferCancelAccept(t *testing.T) {
 
 	// Buyer 1 makes offer then cancels
 	MintAndApproveToken(t, ct, buyer1, 3000)
-	offerPayload1 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":3,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	offerPayload1 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":3,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload1), nil, buyer1, "", true, gas, "")
 	CallMarket(t, ct, "cancelOffer", []byte(`{"offerId":0}`), nil, buyer1, "", true, gas, "")
 
@@ -360,7 +360,7 @@ func TestE2EOfferCancelAccept(t *testing.T) {
 
 	// Buyer 2 makes offer and seller accepts
 	MintAndApproveToken(t, ct, buyer2, 5000)
-	offerPayload2 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	offerPayload2 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload2), nil, buyer2, "", true, gas, "")
 
 	ApproveNftForMarket(t, ct, seller)
@@ -515,12 +515,12 @@ func TestOfferMadeEventDetails(t *testing.T) {
 	MintNft(t, ct, ownerAddress, "1", 10, 100)
 	MintAndApproveToken(t, ct, buyer, 5000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	_, _, logs := CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	AssertEventContains(t, logs, "offer_made", `"buyer":"hive:buyer"`)
 	AssertEventContains(t, logs, "offer_made", `"amount":5`)
-	AssertEventContains(t, logs, "offer_made", `"pricePerUnit":1000`)
+	AssertEventContains(t, logs, "offer_made", `"pricePerUnit":"1000"`)
 }
 
 func TestOfferAcceptedEventDetails(t *testing.T) {
@@ -533,7 +533,7 @@ func TestOfferAcceptedEventDetails(t *testing.T) {
 	MintNft(t, ct, seller, "1", 5, 100)
 	MintAndApproveToken(t, ct, buyer, 5000)
 
-	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", true, gas, "")
 
 	ApproveNftForMarket(t, ct, seller)
@@ -541,7 +541,7 @@ func TestOfferAcceptedEventDetails(t *testing.T) {
 
 	AssertEventContains(t, logs, "offer_accepted", `"seller":"hive:tibfox"`)
 	AssertEventContains(t, logs, "offer_accepted", `"buyer":"hive:buyer"`)
-	AssertEventContains(t, logs, "offer_accepted", `"totalPrice":5000`)
+	AssertEventContains(t, logs, "offer_accepted", `"totalPrice":"5000"`)
 	// Fee: 5000 * 250 / 10000 = 125
-	AssertEventContains(t, logs, "offer_accepted", `"fee":125`)
+	AssertEventContains(t, logs, "offer_accepted", `"fee":"125"`)
 }

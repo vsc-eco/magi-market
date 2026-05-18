@@ -22,7 +22,7 @@ func TestAcceptOfferPartial(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":10,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":10,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	ApproveNftForMarket(t, ct, ownerAddress)
@@ -48,7 +48,7 @@ func TestAcceptOfferPartialThenFull(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":10,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":10,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	ApproveNftForMarket(t, ct, ownerAddress)
@@ -71,7 +71,7 @@ func TestAcceptOfferExceedsAmount(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	ApproveNftForMarket(t, ct, ownerAddress)
@@ -86,9 +86,13 @@ func TestAcceptOfferInsufficientNftBalance(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
+	// Approval-custody model: seller must approve the market as operator first;
+	// the contract gates on approval before the NFT-balance check, so without
+	// this the abort would be "not approved" instead of "Insufficient NFT balance".
+	ApproveNftForMarket(t, ct, ownerAddress)
 	CallMarket(t, ct, "acceptOffer", []byte(`{"offerId":0}`), nil, ownerAddress, "", false, gas, "Insufficient NFT balance")
 }
 
@@ -133,7 +137,7 @@ func TestFeeLockedAtOfferCreation(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", true, gas, "")
 
 	// Change fee to 10%
@@ -156,32 +160,32 @@ func TestSetMinOffer(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
-	CallMarket(t, ct, "setMinOffer", []byte(`{"minOffer":100}`), nil, ownerAddress, "", true, gas, "")
+	CallMarket(t, ct, "setMinOffer", []byte(`{"minOffer":"100"}`), nil, ownerAddress, "", true, gas, "")
 
 	result, _, _ := CallMarket(t, ct, "getMinOffer", nil, nil, "hive:anyone", "", true, gas, "")
-	var resp struct{ MinOffer uint64 `json:"minOffer"` }
+	var resp struct{ MinOffer string `json:"minOffer"` }
 	parseJSON(result, &resp)
-	assert.Equal(t, uint64(100), resp.MinOffer)
+	assert.Equal(t, "100", resp.MinOffer)
 }
 
 func TestSetMinOfferNonOwner(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
-	CallMarket(t, ct, "setMinOffer", []byte(`{"minOffer":100}`), nil, "hive:random", "", false, gas, "Only owner can set minimum offer")
+	CallMarket(t, ct, "setMinOffer", []byte(`{"minOffer":"100"}`), nil, "hive:random", "", false, gas, "Only owner can set minimum offer")
 }
 
 func TestOfferBelowMinimum(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
-	CallMarket(t, ct, "setMinOffer", []byte(`{"minOffer":500}`), nil, ownerAddress, "", true, gas, "")
+	CallMarket(t, ct, "setMinOffer", []byte(`{"minOffer":"500"}`), nil, ownerAddress, "", true, gas, "")
 
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
 	// Total = 1 * 100 = 100 < 500
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","pricePerUnit":100}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","pricePerUnit":"100"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", false, gas, "Offer below minimum threshold")
 }
 
@@ -189,13 +193,13 @@ func TestOfferAboveMinimum(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
-	CallMarket(t, ct, "setMinOffer", []byte(`{"minOffer":500}`), nil, ownerAddress, "", true, gas, "")
+	CallMarket(t, ct, "setMinOffer", []byte(`{"minOffer":"500"}`), nil, ownerAddress, "", true, gas, "")
 
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
 	// Total = 5 * 200 = 1000 >= 500
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":200}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"200"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 }
 
@@ -203,11 +207,11 @@ func TestMinOfferInGetInfo(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
-	CallMarket(t, ct, "setMinOffer", []byte(`{"minOffer":999}`), nil, ownerAddress, "", true, gas, "")
+	CallMarket(t, ct, "setMinOffer", []byte(`{"minOffer":"999"}`), nil, ownerAddress, "", true, gas, "")
 
 	result, _, _ := CallMarket(t, ct, "getInfo", nil, nil, "hive:anyone", "", true, gas, "")
 	info := ParseInfo(result)
-	assert.Equal(t, uint64(999), info.MinOffer)
+	assert.Equal(t, "999", info.MinOffer)
 }
 
 // ===================================
@@ -295,15 +299,18 @@ func TestEmergencyWithdrawNft(t *testing.T) {
 	MintNft(t, ct, ownerAddress, "1", 5, 100)
 	ApproveNftForMarket(t, ct, ownerAddress)
 
-	// List NFT (escrow into marketplace)
-	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
-	CallMarket(t, ct, "list", []byte(listPayload), nil, ownerAddress, "", true, gas, "")
+	// Under the approval-custody model listings never escrow the NFT, but
+	// auctions still do. Create an auction so the marketplace genuinely holds
+	// the NFT, giving emergencyWithdraw something real to rescue.
+	auctionPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"1000","endPrice":"0","startBlock":100,"endBlock":200}`, NftContractID, TokenID)
+	CallMarket(t, ct, "createAuction", []byte(auctionPayload), nil, ownerAddress, "", true, gas, "")
+	assert.Equal(t, uint64(5), QueryNftBalance(t, ct, MarketContractAddress, "1"))
 
 	// Pause
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
 
 	// Emergency withdraw
-	withdrawPayload := fmt.Sprintf(`{"tokenType":"nft","contract":"%s","tokenId":"1","amount":5,"to":"hive:rescue"}`, NftContractID)
+	withdrawPayload := fmt.Sprintf(`{"tokenType":"nft","contract":"%s","tokenId":"1","amount":"5","to":"hive:rescue"}`, NftContractID)
 	_, _, logs := CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, ownerAddress, "", true, gas, "")
 	AssertEventEmitted(t, logs, "emergency_withdraw")
 
@@ -320,14 +327,14 @@ func TestEmergencyWithdrawToken(t *testing.T) {
 	MintAndApproveToken(t, ct, buyer, 50000)
 
 	// Make offer (escrow tokens into marketplace)
-	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", true, gas, "")
 
 	// Pause
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
 
 	// Emergency withdraw tokens
-	withdrawPayload := fmt.Sprintf(`{"tokenType":"token","contract":"%s","tokenId":"","amount":5000,"to":"%s"}`, TokenID, buyer)
+	withdrawPayload := fmt.Sprintf(`{"tokenType":"token","contract":"%s","tokenId":"","amount":"5000","to":"%s"}`, TokenID, buyer)
 	CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, ownerAddress, "", true, gas, "")
 
 	buyerBalance := QueryTokenBalance(t, ct, buyer)
@@ -338,7 +345,7 @@ func TestEmergencyWithdrawNotPaused(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
-	withdrawPayload := fmt.Sprintf(`{"tokenType":"token","contract":"%s","tokenId":"","amount":100,"to":"hive:rescue"}`, TokenID)
+	withdrawPayload := fmt.Sprintf(`{"tokenType":"token","contract":"%s","tokenId":"","amount":"100","to":"hive:rescue"}`, TokenID)
 	CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, ownerAddress, "", false, gas, "Contract must be paused")
 }
 
@@ -348,7 +355,7 @@ func TestEmergencyWithdrawNotOwner(t *testing.T) {
 
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
 
-	withdrawPayload := fmt.Sprintf(`{"tokenType":"token","contract":"%s","tokenId":"","amount":100,"to":"hive:rescue"}`, TokenID)
+	withdrawPayload := fmt.Sprintf(`{"tokenType":"token","contract":"%s","tokenId":"","amount":"100","to":"hive:rescue"}`, TokenID)
 	CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, "hive:random", "", false, gas, "Only owner can emergency withdraw")
 }
 
@@ -358,7 +365,7 @@ func TestEmergencyWithdrawInvalidType(t *testing.T) {
 
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
 
-	withdrawPayload := fmt.Sprintf(`{"tokenType":"invalid","contract":"%s","tokenId":"","amount":100,"to":"hive:rescue"}`, TokenID)
+	withdrawPayload := fmt.Sprintf(`{"tokenType":"invalid","contract":"%s","tokenId":"","amount":"100","to":"hive:rescue"}`, TokenID)
 	CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, ownerAddress, "", false, gas, "Token type must be")
 }
 

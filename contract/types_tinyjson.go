@@ -472,7 +472,7 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract6(in *jlexer.Lexer, out *SetMinOff
 		}
 		switch key {
 		case "minOffer":
-			out.MinOffer = uint64(in.Uint64())
+			out.MinOffer = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -490,7 +490,7 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract6(out *jwriter.Writer, in SetMinOf
 	{
 		const prefix string = ",\"minOffer\":"
 		out.RawString(prefix[1:])
-		out.Uint64(uint64(in.MinOffer))
+		out.String(string(in.MinOffer))
 	}
 	out.RawByte('}')
 }
@@ -2305,7 +2305,7 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract29(in *jlexer.Lexer, out *MinOffer
 		}
 		switch key {
 		case "minOffer":
-			out.MinOffer = uint64(in.Uint64())
+			out.MinOffer = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -2323,7 +2323,7 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract29(out *jwriter.Writer, in MinOffe
 	{
 		const prefix string = ",\"minOffer\":"
 		out.RawString(prefix[1:])
-		out.Uint64(uint64(in.MinOffer))
+		out.String(string(in.MinOffer))
 	}
 	out.RawByte('}')
 }
@@ -3364,7 +3364,7 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract41(in *jlexer.Lexer, out *InfoResp
 		case "paused":
 			out.Paused = bool(in.Bool())
 		case "minOffer":
-			out.MinOffer = uint64(in.Uint64())
+			out.MinOffer = string(in.String())
 		case "minBidIncrementBps":
 			out.MinBidIncrementBps = uint64(in.Uint64())
 		case "antiSnipeBlocks":
@@ -3406,7 +3406,7 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract41(out *jwriter.Writer, in InfoRes
 	{
 		const prefix string = ",\"minOffer\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.MinOffer))
+		out.String(string(in.MinOffer))
 	}
 	{
 		const prefix string = ",\"minBidIncrementBps\":"
@@ -3668,7 +3668,7 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract45(in *jlexer.Lexer, out *Emergenc
 		case "tokenId":
 			out.TokenId = string(in.String())
 		case "amount":
-			out.Amount = uint64(in.Uint64())
+			out.Amount = string(in.String())
 		case "to":
 			out.To = string(in.String())
 		default:
@@ -3703,7 +3703,7 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract45(out *jwriter.Writer, in Emergen
 	{
 		const prefix string = ",\"amount\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.Amount))
+		out.String(string(in.Amount))
 	}
 	{
 		const prefix string = ",\"to\":"
@@ -3842,7 +3842,7 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract47(in *jlexer.Lexer, out *Emergenc
 		case "tokenId":
 			out.TokenId = string(in.String())
 		case "amount":
-			out.Amount = uint64(in.Uint64())
+			out.Amount = string(in.String())
 		case "to":
 			out.To = string(in.String())
 		default:
@@ -3877,7 +3877,7 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract47(out *jwriter.Writer, in Emergen
 	{
 		const prefix string = ",\"amount\":"
 		out.RawString(prefix)
-		out.Uint64(uint64(in.Amount))
+		out.String(string(in.Amount))
 	}
 	{
 		const prefix string = ",\"to\":"

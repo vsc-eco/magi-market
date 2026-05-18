@@ -170,7 +170,7 @@ func emitRoyaltySet(nftContract string, royaltyBps uint64, royaltyRecipient stri
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitEmergencyWithdraw(tokenType, contract, tokenId string, amount uint64, to string) {
+func emitEmergencyWithdraw(tokenType, contract, tokenId, amount, to string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := EmergencyWithdrawEvent{
 		Type: "emergency_withdraw",

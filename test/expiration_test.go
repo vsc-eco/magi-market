@@ -19,7 +19,7 @@ func TestListWithExpiration(t *testing.T) {
 
 	ct.BlockHeight = 100
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000,"expirationBlock":200}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000","expirationBlock":200}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, ownerAddress, "", true, gas, "")
 
 	// Verify listing has expiration
@@ -37,7 +37,7 @@ func TestBuyExpiredListing(t *testing.T) {
 
 	ct.BlockHeight = 100
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000,"expirationBlock":150}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000","expirationBlock":150}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, ownerAddress, "", true, gas, "")
 
 	buyer := "hive:buyer"
@@ -59,7 +59,7 @@ func TestBuyBeforeExpiration(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000,"expirationBlock":200}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000","expirationBlock":200}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, ownerAddress, "", true, gas, "")
 
 	// Buy before expiration
@@ -74,7 +74,7 @@ func TestListNoExpiration(t *testing.T) {
 	ApproveNftForMarket(t, ct, ownerAddress)
 
 	// ExpirationBlock=0 means no expiration
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, ownerAddress, "", true, gas, "")
 
 	buyer := "hive:buyer"
@@ -92,7 +92,7 @@ func TestDelistExpiredListing(t *testing.T) {
 	ApproveNftForMarket(t, ct, ownerAddress)
 
 	ct.BlockHeight = 100
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000,"expirationBlock":150}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000","expirationBlock":150}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, ownerAddress, "", true, gas, "")
 
 	// Advance past expiration, seller can still delist
@@ -112,7 +112,7 @@ func TestOfferWithExpiration(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000,"expirationBlock":200}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000","expirationBlock":200}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	result, _, _ := CallMarket(t, ct, "getOffer", []byte(`{"offerId":0}`), nil, "hive:anyone", "", true, gas, "")
@@ -130,7 +130,7 @@ func TestAcceptExpiredOffer(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000,"expirationBlock":150}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000","expirationBlock":150}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	// Advance past expiration
@@ -146,7 +146,7 @@ func TestCancelExpiredOfferByAnyone(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000,"expirationBlock":150}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000","expirationBlock":150}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	// Anyone can cancel an expired offer
@@ -166,7 +166,7 @@ func TestCancelNonExpiredOfferByNonBuyer(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000,"expirationBlock":200}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000","expirationBlock":200}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 
 	// Non-buyer cannot cancel non-expired offer

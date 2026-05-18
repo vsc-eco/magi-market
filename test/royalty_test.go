@@ -90,7 +90,7 @@ func TestBuyWithRoyalty(t *testing.T) {
 	MintNft(t, ct, ownerAddress, "1", 1, 1)
 	ApproveNftForMarket(t, ct, ownerAddress)
 
-	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","pricePerUnit":10000}`, NftContractID, TokenID)
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","pricePerUnit":"10000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(listPayload), nil, ownerAddress, "", true, gas, "")
 
 	buyer := "hive:buyer"
@@ -122,7 +122,7 @@ func TestAcceptOfferWithRoyalty(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":1000}`, NftContractID, TokenID)
+	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", true, gas, "")
 
 	// Owner accepts offer
@@ -145,7 +145,7 @@ func TestRoyaltyLockedAtListingCreation(t *testing.T) {
 	MintNft(t, ct, ownerAddress, "1", 1, 1)
 	ApproveNftForMarket(t, ct, ownerAddress)
 
-	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","pricePerUnit":10000}`, NftContractID, TokenID)
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","pricePerUnit":"10000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(listPayload), nil, ownerAddress, "", true, gas, "")
 
 	// Change royalty to 20% after listing

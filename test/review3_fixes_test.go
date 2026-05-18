@@ -19,14 +19,14 @@ func TestListReturnsId(t *testing.T) {
 	MintNft(t, ct, seller, "1", 10, 100)
 	ApproveNftForMarket(t, ct, seller)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":100}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"100"}`, NftContractID, TokenID)
 	result, _, _ := CallMarket(t, ct, "list", []byte(payload), nil, seller, "", true, gas, "")
 	created := ParseCreated(result)
 	assert.True(t, created.Success)
 	assert.Equal(t, uint64(0), created.Id)
 
 	// Second listing should get id=1
-	payload2 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":200}`, NftContractID, TokenID)
+	payload2 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"200"}`, NftContractID, TokenID)
 	result2, _, _ := CallMarket(t, ct, "list", []byte(payload2), nil, seller, "", true, gas, "")
 	created2 := ParseCreated(result2)
 	assert.Equal(t, uint64(1), created2.Id)
@@ -39,14 +39,14 @@ func TestMakeOfferReturnsId(t *testing.T) {
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 10000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":100}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"100"}`, NftContractID, TokenID)
 	result, _, _ := CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", true, gas, "")
 	created := ParseCreated(result)
 	assert.True(t, created.Success)
 	assert.Equal(t, uint64(0), created.Id)
 
 	// Second offer should get id=1
-	payload2 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":100}`, NftContractID, TokenID)
+	payload2 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"100"}`, NftContractID, TokenID)
 	result2, _, _ := CallMarket(t, ct, "makeOffer", []byte(payload2), nil, buyer, "", true, gas, "")
 	created2 := ParseCreated(result2)
 	assert.Equal(t, uint64(1), created2.Id)
@@ -61,7 +61,7 @@ func TestCreateAuctionReturnsId(t *testing.T) {
 	MintNft(t, ct, seller, "1", 10, 100)
 	ApproveNftForMarket(t, ct, seller)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":100,"endBlock":100}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"100","endBlock":100}`, NftContractID, TokenID)
 	result, _, _ := CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
 	created := ParseCreated(result)
 	assert.True(t, created.Success)
@@ -84,9 +84,9 @@ func TestSettleAuctionStateAfterTransfer(t *testing.T) {
 	MintAndApproveToken(t, ct, buyer, 10000)
 
 	// Create and bid on English auction
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":100,"endBlock":50}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"100","endBlock":50}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":2000}`), nil, buyer, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"2000"}`), nil, buyer, "", true, gas, "")
 
 	// Settle after end
 	ct.BlockHeight = 51
@@ -116,11 +116,11 @@ func TestSellerCannotBidOwnEnglishAuction(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, seller, 10000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":100,"endBlock":100}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"100","endBlock":100}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Seller tries to bid on own auction
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":1000}`), nil, seller, "", false, gas, "Seller cannot bid on own auction")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"1000"}`), nil, seller, "", false, gas, "Seller cannot bid on own auction")
 }
 
 func TestSellerCannotBidOwnDutchAuction(t *testing.T) {
@@ -133,10 +133,10 @@ func TestSellerCannotBidOwnDutchAuction(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, seller, 10000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"dutch","startPrice":200,"endPrice":50,"endBlock":100}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"dutch","startPrice":"200","endPrice":"50","endBlock":100}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
 
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":5000}`), nil, seller, "", false, gas, "Seller cannot bid on own auction")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"5000"}`), nil, seller, "", false, gas, "Seller cannot bid on own auction")
 }
 
 func TestOtherUserCanBidOnAuction(t *testing.T) {
@@ -150,11 +150,11 @@ func TestOtherUserCanBidOnAuction(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, buyer, 10000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":100,"endBlock":100}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"100","endBlock":100}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Other user can bid
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":1000}`), nil, buyer, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"1000"}`), nil, buyer, "", true, gas, "")
 }
 
 // ===================================
@@ -171,7 +171,7 @@ func TestAcceptOfferWorksWhenPaused(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, buyer, 5000)
 
-	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":100}`, NftContractID, TokenID)
+	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"100"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", true, gas, "")
 
 	// Pause the contract
@@ -195,7 +195,7 @@ func TestAcceptCollectionOfferWorksWhenPaused(t *testing.T) {
 	MintAndApproveToken(t, ct, buyer, 5000)
 
 	// Collection offer (no tokenId)
-	offerPayload := fmt.Sprintf(`{"nftContract":"%s","amount":5,"paymentToken":"%s","pricePerUnit":100}`, NftContractID, TokenID)
+	offerPayload := fmt.Sprintf(`{"nftContract":"%s","amount":5,"paymentToken":"%s","pricePerUnit":"100"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", true, gas, "")
 
 	// Pause
@@ -217,7 +217,7 @@ func TestMakeOfferBlockedWhenPaused(t *testing.T) {
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
 
 	// Making new offers is still blocked
-	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":100}`, NftContractID, TokenID)
+	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"100"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", false, gas, "Contract is paused")
 }
 
@@ -240,15 +240,15 @@ func TestEnglishAuctionBidOrderingEscrowFirst(t *testing.T) {
 	MintAndApproveToken(t, ct, bidder1, 1000)
 	MintAndApproveToken(t, ct, bidder2, 2000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":100,"endBlock":100}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"100","endBlock":100}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Bidder1 bids 1000
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":1000}`), nil, bidder1, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"1000"}`), nil, bidder1, "", true, gas, "")
 	assert.Equal(t, uint64(0), QueryTokenBalance(t, ct, bidder1))
 
 	// Bidder2 bids 2000 — bidder1 should get refunded
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":2000}`), nil, bidder2, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"2000"}`), nil, bidder2, "", true, gas, "")
 
 	// Bidder1 got refunded
 	assert.Equal(t, uint64(1000), QueryTokenBalance(t, ct, bidder1))
@@ -306,17 +306,17 @@ func TestMinBidIncrementEnforced(t *testing.T) {
 	// Set 10% min increment (1000 bps)
 	CallMarket(t, ct, "setMinBidIncrement", []byte(`{"minBidIncrementBps":1000}`), nil, ownerAddress, "", true, gas, "")
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":100,"endBlock":100}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"100","endBlock":100}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Bidder1 bids 1000 (meets reserve of 500)
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":1000}`), nil, bidder1, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"1000"}`), nil, bidder1, "", true, gas, "")
 
 	// Bidder2 tries 1050 (5% over 1000, needs 10% = 1100)
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":1050}`), nil, bidder2, "", false, gas, "Bid must exceed current high bid by minimum increment")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"1050"}`), nil, bidder2, "", false, gas, "Bid must exceed current high bid by minimum increment")
 
 	// Bidder2 bids 1100 (exactly 10% over 1000) — should succeed
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":1100}`), nil, bidder2, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"1100"}`), nil, bidder2, "", true, gas, "")
 }
 
 func TestMinBidIncrementNotAppliedToFirstBid(t *testing.T) {
@@ -334,11 +334,11 @@ func TestMinBidIncrementNotAppliedToFirstBid(t *testing.T) {
 	// Set 50% min increment
 	CallMarket(t, ct, "setMinBidIncrement", []byte(`{"minBidIncrementBps":5000}`), nil, ownerAddress, "", true, gas, "")
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","auctionType":"english","startPrice":100,"endBlock":100}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","auctionType":"english","startPrice":"100","endBlock":100}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
 
 	// First bid at exactly reserve — should succeed (no increment applied to first bid)
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":100}`), nil, bidder, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"100"}`), nil, bidder, "", true, gas, "")
 }
 
 // ===================================
@@ -378,12 +378,12 @@ func TestAntiSnipeExtension(t *testing.T) {
 	// Set anti-snipe extension to 10 blocks
 	CallMarket(t, ct, "setAntiSnipeBlocks", []byte(`{"antiSnipeBlocks":10}`), nil, ownerAddress, "", true, gas, "")
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":100,"endBlock":50}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"100","endBlock":50}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Bid at block 45 (5 blocks before end, within anti-snipe window of 10)
 	ct.BlockHeight = 45
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":1000}`), nil, bidder, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"1000"}`), nil, bidder, "", true, gas, "")
 
 	// Verify endBlock was extended to currentBlock + antiSnipeBlocks = 45 + 10 = 55
 	result, _, _ := CallMarket(t, ct, "getAuction", []byte(`{"auctionId":0}`), nil, "hive:anyone", "", true, gas, "")
@@ -406,12 +406,12 @@ func TestAntiSnipeNoExtensionWhenFarFromEnd(t *testing.T) {
 	// Set anti-snipe extension to 5 blocks
 	CallMarket(t, ct, "setAntiSnipeBlocks", []byte(`{"antiSnipeBlocks":5}`), nil, ownerAddress, "", true, gas, "")
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":100,"endBlock":100}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"100","endBlock":100}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Bid at block 20 (80 blocks before end, NOT within anti-snipe window)
 	ct.BlockHeight = 20
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":1000}`), nil, bidder, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"1000"}`), nil, bidder, "", true, gas, "")
 
 	// EndBlock should NOT be extended
 	result, _, _ := CallMarket(t, ct, "getAuction", []byte(`{"auctionId":0}`), nil, "hive:anyone", "", true, gas, "")
@@ -433,12 +433,12 @@ func TestAntiSnipeNotAppliedWhenDisabled(t *testing.T) {
 
 	// antiSnipeBlocks defaults to 0 (disabled)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":100,"endBlock":50}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"100","endBlock":50}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
 
 	// Bid at block 49 (1 block before end)
 	ct.BlockHeight = 49
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":1000}`), nil, bidder, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"1000"}`), nil, bidder, "", true, gas, "")
 
 	// EndBlock should NOT be extended when anti-snipe is disabled
 	result, _, _ := CallMarket(t, ct, "getAuction", []byte(`{"auctionId":0}`), nil, "hive:anyone", "", true, gas, "")
@@ -463,18 +463,18 @@ func TestAntiSnipeMultipleExtensions(t *testing.T) {
 	// 5 block anti-snipe window
 	CallMarket(t, ct, "setAntiSnipeBlocks", []byte(`{"antiSnipeBlocks":5}`), nil, ownerAddress, "", true, gas, "")
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":100,"endBlock":50}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"100","endBlock":50}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, seller, "", true, gas, "")
 
 	// First bid at block 48 (within window) → extends to 53
 	ct.BlockHeight = 48
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":1000}`), nil, bidder1, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"1000"}`), nil, bidder1, "", true, gas, "")
 	result, _, _ := CallMarket(t, ct, "getAuction", []byte(`{"auctionId":0}`), nil, "hive:anyone", "", true, gas, "")
 	assert.Equal(t, uint64(53), ParseAuction(result).EndBlock)
 
 	// Second bid at block 52 (within new window of 53) → extends to 57
 	ct.BlockHeight = 52
-	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":2000}`), nil, bidder2, "", true, gas, "")
+	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"2000"}`), nil, bidder2, "", true, gas, "")
 	result2, _, _ := CallMarket(t, ct, "getAuction", []byte(`{"auctionId":0}`), nil, "hive:anyone", "", true, gas, "")
 	assert.Equal(t, uint64(57), ParseAuction(result2).EndBlock)
 }

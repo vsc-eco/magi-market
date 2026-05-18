@@ -12,30 +12,11 @@ import (
 // Safe Math Utilities
 // ===================================
 
-func safeAdd(a, b uint64) uint64 {
-	sum := a + b
-	if sum < a {
-		sdk.Abort("safeAdd overflow")
-	}
-	return sum
-}
-
 func safeSub(a, b uint64) uint64 {
 	if b > a {
 		sdk.Abort("safeSub underflow")
 	}
 	return a - b
-}
-
-func safeMul(a, b uint64) uint64 {
-	if a == 0 || b == 0 {
-		return 0
-	}
-	result := a * b
-	if result/a != b {
-		sdk.Abort("safeMul overflow")
-	}
-	return result
 }
 
 // ===================================
@@ -239,20 +220,6 @@ func getFeeRecipient() string {
 	return getStringState("fee_rcpt")
 }
 
-// calculateFeeWithBps computes fee and seller payment using a specific fee bps value.
-func calculateFeeWithBps(total, feeBps uint64) (uint64, uint64) {
-	if feeBps == 0 {
-		return 0, total
-	}
-	fee := safeMul(total, feeBps) / 10000
-	return fee, safeSub(total, fee)
-}
-
-// calculateFee computes fee and seller payment using the current global fee bps.
-func calculateFee(total uint64) (uint64, uint64) {
-	return calculateFeeWithBps(total, getFeeBps())
-}
-
 // ===================================
 // Royalty Helpers
 // ===================================
@@ -281,12 +248,12 @@ func setRoyaltyRecipientState(nftContract, recipient string) {
 // Min Offer Helpers
 // ===================================
 
-func getMinOffer() uint64 {
-	return getUint64State("min_ofr")
+func getMinOfferMoney() *big.Int {
+	return getMoneyState("min_ofr")
 }
 
-func setMinOfferState(v uint64) {
-	setUint64State("min_ofr", v)
+func setMinOfferMoney(v *big.Int) {
+	setMoneyState("min_ofr", v)
 }
 
 // ===================================
@@ -350,22 +317,6 @@ func assertPaymentTokenAllowed(token string) {
 // ===================================
 // Cross-Contract Token Helpers (ERC-20)
 // ===================================
-
-func tokenTransferFrom(tokenContract, from, to string, amount uint64) {
-	payload := `{"from":"` + from + `","to":"` + to + `","amount":"` + strconv.FormatUint(amount, 10) + `"}`
-	result := sdk.ContractCallSimple(tokenContract, "transferFrom", payload)
-	if result == nil {
-		sdk.Abort("transferFrom call failed")
-	}
-}
-
-func tokenTransfer(tokenContract, to string, amount uint64) {
-	payload := `{"to":"` + to + `","amount":"` + strconv.FormatUint(amount, 10) + `"}`
-	result := sdk.ContractCallSimple(tokenContract, "transfer", payload)
-	if result == nil {
-		sdk.Abort("transfer call failed")
-	}
-}
 
 // ===================================
 // Cross-Contract NFT Helpers (ERC-1155)
@@ -465,19 +416,6 @@ func nftGetOwner(nftContract string) string {
 // Dutch Auction Price Calculation
 // ===================================
 
-func getDutchAuctionCurrentPrice(startPrice, endPrice, startBlock, endBlock, currentBlock uint64) uint64 {
-	if currentBlock <= startBlock {
-		return startPrice
-	}
-	if currentBlock >= endBlock {
-		return endPrice
-	}
-	elapsed := currentBlock - startBlock
-	duration := endBlock - startBlock
-	priceDrop := safeMul(startPrice-endPrice, elapsed) / duration
-	return startPrice - priceDrop
-}
-
 func getDutchAuctionCurrentPriceBig(startPrice, endPrice *big.Int, startBlock, endBlock, currentBlock uint64) *big.Int {
 	if currentBlock <= startBlock {
 		return new(big.Int).Set(startPrice)
@@ -496,21 +434,7 @@ func getDutchAuctionCurrentPriceBig(startPrice, endPrice *big.Int, startBlock, e
 // Fee Distribution Helper
 // ===================================
 
-// distributeFees calculates marketplace fee, royalty, and seller payment from a total price.
-// Returns (fee, royalty, sellerPayment).
-func distributeFees(totalPrice, lockedFeeBps, lockedRoyaltyBps uint64) (uint64, uint64, uint64) {
-	fee, afterFee := calculateFeeWithBps(totalPrice, lockedFeeBps)
-	royalty := uint64(0)
-	if lockedRoyaltyBps > 0 {
-		royalty = safeMul(totalPrice, lockedRoyaltyBps) / 10000
-	}
-	sellerPayment := safeSub(afterFee, royalty)
-	return fee, royalty, sellerPayment
-}
-
 // distributeFeesBig splits totalPrice into (fee, royalty, sellerPayment).
-// big.Int counterpart of distributeFees; the uint64 distributeFees stays
-// until its last caller (offers/auctions) is migrated, then is removed in Task 5.
 func distributeFeesBig(totalPrice *big.Int, lockedFeeBps, lockedRoyaltyBps uint64) (*big.Int, *big.Int, *big.Int) {
 	fee := mMulBpsDiv(totalPrice, lockedFeeBps)
 	royalty := mMulBpsDiv(totalPrice, lockedRoyaltyBps)

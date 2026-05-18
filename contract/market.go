@@ -200,7 +200,7 @@ func doBuy(caller string, p *BuyPayload) {
 	totalCost := mMulU64(pricePerUnit, p.Amount)
 
 	received := escrowIn(paymentToken, caller, totalCost)
-	// distributeFeesBig: big.Int path; offers/auctions still on uint64 distributeFees until Tasks 3-4.
+	// distributeFeesBig splits the received payment into fee/royalty/seller (big.Int).
 	fee, royalty, sellerPayment := distributeFeesBig(received, lockedFeeBps, lockedRoyaltyBps)
 
 	// Transfer NFT from seller -> buyer using operator approval. If the seller
@@ -326,7 +326,7 @@ func MakeOffer(payload *string) *string {
 	assertPaymentTokenAllowed(p.PaymentToken)
 
 	totalOffer := mMulU64(price, p.Amount)
-	minOffer := getMoneyState("min_ofr")
+	minOffer := getMinOfferMoney()
 	if !mIsZero(minOffer) && mCmp(totalOffer, minOffer) < 0 {
 		sdk.Abort("Offer below minimum threshold")
 	}
@@ -727,7 +727,7 @@ func SetMinOffer(payload *string) *string {
 		sdk.Abort("Invalid payload")
 	}
 
-	setMinOfferState(p.MinOffer)
+	setMinOfferMoney(parseMoney(p.MinOffer))
 	return jsonResponse(&SuccessResponse{Success: true})
 }
 
@@ -811,23 +811,23 @@ func EmergencyWithdraw(payload *string) *string {
 		sdk.Abort("Invalid payload")
 	}
 
-	if p.Contract == "" || p.To == "" || p.Amount == 0 {
+	if p.Contract == "" || p.To == "" || p.Amount == "" {
 		sdk.Abort("Contract, to, and amount required")
 	}
-
-	contractAddr := getContractAddress()
-
 	if p.TokenType == "nft" {
 		if p.TokenId == "" {
 			sdk.Abort("Token ID required for NFT withdraw")
 		}
-		nftSafeTransferFrom(p.Contract, contractAddr, p.To, p.TokenId, p.Amount)
+		qty := parseMoney(p.Amount)
+		if !qty.IsUint64() {
+			sdk.Abort("NFT amount too large")
+		}
+		nftSafeTransferFrom(p.Contract, getContractAddress(), p.To, p.TokenId, qty.Uint64())
 	} else if p.TokenType == "token" {
-		tokenTransfer(p.Contract, p.To, p.Amount)
+		tokenTransferBig(p.Contract, p.To, parseMoney(p.Amount))
 	} else {
 		sdk.Abort("Token type must be 'nft' or 'token'")
 	}
-
 	emitEmergencyWithdraw(p.TokenType, p.Contract, p.TokenId, p.Amount, p.To)
 	return jsonResponse(&SuccessResponse{Success: true})
 }
@@ -1029,7 +1029,7 @@ func GetInfo(payload *string) *string {
 		FeeBps:             getFeeBps(),
 		FeeRecipient:       getFeeRecipient(),
 		Paused:             isPaused(),
-		MinOffer:           getMinOffer(),
+		MinOffer:           formatMoney(getMinOfferMoney()),
 		MinBidIncrementBps: getMinBidIncrementBps(),
 		AntiSnipeBlocks:    getAntiSnipeBlocks(),
 	})
@@ -1076,7 +1076,7 @@ func GetRoyalty(payload *string) *string {
 //go:wasmexport getMinOffer
 func GetMinOffer(payload *string) *string {
 	assertInit()
-	return jsonResponse(&MinOfferResponse{MinOffer: getMinOffer()})
+	return jsonResponse(&MinOfferResponse{MinOffer: formatMoney(getMinOfferMoney())})
 }
 
 //go:wasmexport isPaymentTokenAllowed

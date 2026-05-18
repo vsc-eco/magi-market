@@ -91,7 +91,7 @@ type GetRoyaltyPayload struct {
 }
 
 type SetMinOfferPayload struct {
-	MinOffer uint64 `json:"minOffer"`
+	MinOffer string `json:"minOffer"`
 }
 
 type PaymentTokenPayload struct {
@@ -102,7 +102,7 @@ type EmergencyWithdrawPayload struct {
 	TokenType string `json:"tokenType"`
 	Contract  string `json:"contract"`
 	TokenId   string `json:"tokenId"`
-	Amount    uint64 `json:"amount"`
+	Amount    string `json:"amount"`
 	To        string `json:"to"`
 }
 
@@ -199,7 +199,7 @@ type InfoResponse struct {
 	FeeBps             uint64 `json:"feeBps"`
 	FeeRecipient       string `json:"feeRecipient"`
 	Paused             bool   `json:"paused"`
-	MinOffer           uint64 `json:"minOffer"`
+	MinOffer           string `json:"minOffer"`
 	MinBidIncrementBps uint64 `json:"minBidIncrementBps"`
 	AntiSnipeBlocks    uint64 `json:"antiSnipeBlocks"`
 }
@@ -219,7 +219,7 @@ type RoyaltyResponse struct {
 }
 
 type MinOfferResponse struct {
-	MinOffer uint64 `json:"minOffer"`
+	MinOffer string `json:"minOffer"`
 }
 
 type PaymentTokenAllowedResponse struct {
@@ -415,7 +415,7 @@ type EmergencyWithdrawAttributes struct {
 	TokenType string `json:"tokenType"`
 	Contract  string `json:"contract"`
 	TokenId   string `json:"tokenId"`
-	Amount    uint64 `json:"amount"`
+	Amount    string `json:"amount"`
 	To        string `json:"to"`
 }
 

@@ -265,7 +265,7 @@ type OfferResult struct {
 	NftContract     string `json:"nftContract"`
 	TokenId         string `json:"tokenId"`
 	Amount          uint64 `json:"amount"`
-	PricePerUnit    uint64 `json:"pricePerUnit"`
+	PricePerUnit    string `json:"pricePerUnit"`
 	PaymentToken    string `json:"paymentToken"`
 	Active          bool   `json:"active"`
 	ExpirationBlock uint64 `json:"expirationBlock"`
@@ -301,7 +301,7 @@ type InfoResult struct {
 	FeeBps             uint64 `json:"feeBps"`
 	FeeRecipient       string `json:"feeRecipient"`
 	Paused             bool   `json:"paused"`
-	MinOffer           uint64 `json:"minOffer"`
+	MinOffer           string `json:"minOffer"`
 	MinBidIncrementBps uint64 `json:"minBidIncrementBps"`
 	AntiSnipeBlocks    uint64 `json:"antiSnipeBlocks"`
 }

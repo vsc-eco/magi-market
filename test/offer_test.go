@@ -37,7 +37,7 @@ func TestMakeOffer(t *testing.T) {
 	assert.Equal(t, NftContractID, offer.NftContract)
 	assert.Equal(t, "1", offer.TokenId)
 	assert.Equal(t, uint64(5), offer.Amount)
-	assert.Contains(t, result.Ret, `"pricePerUnit":"1000"`)
+	assert.Equal(t, "1000", offer.PricePerUnit)
 	assert.Equal(t, TokenID, offer.PaymentToken)
 	assert.True(t, offer.Active)
 

@@ -8,9 +8,7 @@ import (
 	"github.com/CosmWasm/tinyjson/jlexer"
 )
 
-// Note: getDutchAuctionCurrentPriceBig lives in internal.go alongside the
-// retained uint64 getDutchAuctionCurrentPrice (kept for non-auction callers
-// until Task 5 retires it).
+// Dutch-auction current-price math is getDutchAuctionCurrentPriceBig in internal.go (big.Int).
 
 // ===================================
 // Auction Functions
