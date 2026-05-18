@@ -2,7 +2,6 @@ package main
 
 import (
 	"magi_market/sdk"
-	"strconv"
 
 	"github.com/CosmWasm/tinyjson/jlexer"
 )
@@ -1097,5 +1096,3 @@ func IsPaymentTokenAllowed(payload *string) *string {
 	return jsonResponse(&PaymentTokenAllowedResponse{Allowed: isPaymentTokenAllowedCheck(p.Token)})
 }
 
-// Ensure strconv is imported (used in internal.go)
-var _ = strconv.FormatUint

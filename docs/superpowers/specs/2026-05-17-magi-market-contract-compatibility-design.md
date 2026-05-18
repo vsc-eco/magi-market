@@ -260,7 +260,8 @@ out of scope here and must not be done as a magi-market-side adapter.
 
 (Prior item — tinygo `wasm-unknown` size/gas budget after adding
 `math/big` — is already proven: the fee-on-transfer mock and the live
-magi-market `main.wasm` both build and the full 249-test suite passes.)
+magi-market `main.wasm` both build and the full 252-test suite passes
+(245 base + 4 fee-on-transfer + 3 UTXO-payment cases).)
 
 ## Resolution: raw cross-contract state reads for ALL getters (2026-05-18, user-decided)
 
