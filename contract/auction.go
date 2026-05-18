@@ -80,6 +80,7 @@ func CreateAuction(payload *string) *string {
 	if nftIsSoulbound(p.NftContract, p.TokenId) {
 		sdk.Abort("Cannot auction soulbound tokens")
 	}
+	assertCollectionAllowed(p.NftContract)
 
 	// Lock current fees and royalties
 	currentFeeBps := getFeeBps()
@@ -156,6 +157,8 @@ func PlaceBid(payload *string) *string {
 	}
 
 	paymentToken := getAuctionField(p.AuctionId, "pt")
+	nftContract := getAuctionField(p.AuctionId, "nc")
+	assertCollectionAllowed(nftContract)
 	contractAddr := getContractAddress()
 
 	if auctionType == "english" {
@@ -257,7 +260,6 @@ func PlaceBid(payload *string) *string {
 		}
 
 		// Transfer NFT to buyer first (before distributing payments)
-		nftContract := getAuctionField(p.AuctionId, "nc")
 		tokenId := getAuctionField(p.AuctionId, "ti")
 		nftSafeTransferFrom(nftContract, contractAddr, caller, tokenId, amount)
 
@@ -333,6 +335,19 @@ func SettleAuction(payload *string) *string {
 	highBidder := getAuctionField(p.AuctionId, "hb")
 	highBid := getAuctionMoney(p.AuctionId, "ha")
 	contractAddr := getContractAddress()
+
+	if isCollectionDenied(nftContract) {
+		// Collection denied mid-auction: treat as no-sale. Return the
+		// escrowed NFT to the seller and refund the high bidder (if any).
+		nftSafeTransferFrom(nftContract, contractAddr, seller, tokenId, amount)
+		setAuctionField(p.AuctionId, "stl", "1")
+		setAuctionField(p.AuctionId, "act", "0")
+		if highBidder != "" && !mIsZero(highBid) {
+			tokenTransferBig(paymentToken, highBidder, highBid)
+		}
+		emitAuctionSettled(p.AuctionId, "", "0", "0", "0")
+		return jsonResponse(&SuccessResponse{Success: true})
+	}
 
 	if highBidder == "" || mIsZero(highBid) {
 		// No bids - return NFT to seller

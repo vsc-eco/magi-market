@@ -78,6 +78,7 @@ func doList(caller string, p *ListPayload) uint64 {
 	if nftIsSoulbound(p.NftContract, p.TokenId) {
 		sdk.Abort("Cannot list soulbound tokens")
 	}
+	assertCollectionAllowed(p.NftContract)
 
 	currentFeeBps := getFeeBps()
 	currentRoyaltyBps := getRoyaltyBps(p.NftContract)
@@ -191,6 +192,7 @@ func doBuy(caller string, p *BuyPayload) {
 	paymentToken := getListingField(p.ListingId, "pt")
 	pricePerUnit := getListingMoney(p.ListingId, "p")
 	nftContract := getListingField(p.ListingId, "nc")
+	assertCollectionAllowed(nftContract)
 	tokenId := getListingField(p.ListingId, "ti")
 	lockedFeeBps := getListingUint64(p.ListingId, "fb")
 	lockedRoyaltyBps := getListingUint64(p.ListingId, "rb")
@@ -314,6 +316,7 @@ func MakeOffer(payload *string) *string {
 	if p.NftContract == "" || p.PaymentToken == "" {
 		sdk.Abort("NFT contract and payment token required")
 	}
+	assertCollectionAllowed(p.NftContract)
 
 	price := parseMoney(p.PricePerUnit)
 	if mIsZero(price) {
@@ -418,6 +421,7 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 		sdk.Abort("Buyer cannot accept own offer")
 	}
 	nftContract := getOfferField(offerId, "nc")
+	assertCollectionAllowed(nftContract)
 	offerAmount := getOfferUint64(offerId, "a")
 	pricePerUnit := getOfferMoney(offerId, "p")
 	paymentToken := getOfferField(offerId, "pt")
