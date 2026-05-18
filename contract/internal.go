@@ -467,6 +467,32 @@ func escrowIn(paymentToken, payer string, requested *big.Int) *big.Int {
 	return received
 }
 
+// ---- collection denylist ----
+
+func denylistKey(nftContract string) string {
+	return "dl|" + nftContract
+}
+
+func isCollectionDenied(nftContract string) bool {
+	v := sdk.StateGetObject(denylistKey(nftContract))
+	return v != nil && *v == "1"
+}
+
+func setCollectionDenied(nftContract string) {
+	sdk.StateSetObject(denylistKey(nftContract), "1")
+}
+
+func clearCollectionDenied(nftContract string) {
+	sdk.StateDeleteObject(denylistKey(nftContract))
+}
+
+// assertCollectionAllowed aborts if the collection is on the denylist.
+func assertCollectionAllowed(nftContract string) {
+	if isCollectionDenied(nftContract) {
+		sdk.Abort("Collection is denied")
+	}
+}
+
 // ---- pending-owner (2-step transfer) ----
 
 func getPendingOwner() string {

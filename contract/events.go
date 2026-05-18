@@ -261,3 +261,27 @@ func emitAuctionCancelled(auctionId uint64, seller string) {
 	event.MarshalTinyJSON(&w)
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
+
+func emitCollectionDenied(nftContract, by string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := CollectionDeniedEvent{
+		Type:       "collectionDenied",
+		Attributes: CollectionDeniedAttributes{NftContract: nftContract, By: by},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitCollectionAllowed(nftContract, by string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := CollectionAllowedEvent{
+		Type:       "collectionAllowed",
+		Attributes: CollectionAllowedAttributes{NftContract: nftContract, By: by},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}

@@ -1144,3 +1144,74 @@ func IsPaymentTokenAllowed(payload *string) *string {
 	return jsonResponse(&PaymentTokenAllowedResponse{Allowed: isPaymentTokenAllowedCheck(p.Token)})
 }
 
+//go:wasmexport denyCollection
+func DenyCollection(payload *string) *string {
+	assertInit()
+
+	_, isOwner := getOwner()
+	if !isOwner {
+		sdk.Abort("Only owner can deny collection")
+	}
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+	var p CollectionPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+	if p.NftContract == "" {
+		sdk.Abort("NFT contract required")
+	}
+
+	setCollectionDenied(p.NftContract)
+	emitCollectionDenied(p.NftContract, getCaller())
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport allowCollection
+func AllowCollection(payload *string) *string {
+	assertInit()
+
+	_, isOwner := getOwner()
+	if !isOwner {
+		sdk.Abort("Only owner can allow collection")
+	}
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+	var p CollectionPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+	if p.NftContract == "" {
+		sdk.Abort("NFT contract required")
+	}
+
+	clearCollectionDenied(p.NftContract)
+	emitCollectionAllowed(p.NftContract, getCaller())
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport isCollectionDenied
+func IsCollectionDenied(payload *string) *string {
+	assertInit()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+	var p CollectionPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	return jsonResponse(&CollectionDeniedResponse{Denied: isCollectionDenied(p.NftContract)})
+}
+

@@ -9,6 +9,14 @@ import (
 	"vsc-node/lib/test_utils"
 )
 
+func ParseCollectionDenied(result test_utils.ContractTestCallResult) bool {
+	var resp struct {
+		Denied bool `json:"denied"`
+	}
+	json.Unmarshal([]byte(result.Ret), &resp)
+	return resp.Denied
+}
+
 func ParsePendingOwner(result test_utils.ContractTestCallResult) string {
 	var resp struct {
 		PendingOwner string `json:"pendingOwner"`
@@ -81,4 +89,27 @@ func TestTwoStepTransferWorksWhilePaused(t *testing.T) {
 	CallMarket(t, ct, "acceptOwnership", nil, nil, "hive:newowner", "", true, gas, "")
 	res, _, _ := CallMarket(t, ct, "getOwner", nil, nil, "hive:anyone", "", true, gas, "")
 	assert.Equal(t, "hive:newowner", ParseOwner(res))
+}
+
+func TestDenyAllowCollectionAdmin(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	q := `{"nftContract":"` + NftContractID + `"}`
+	res, _, _ := CallMarket(t, ct, "isCollectionDenied", []byte(q), nil, "hive:anyone", "", true, gas, "")
+	assert.False(t, ParseCollectionDenied(res), "default allowed")
+
+	CallMarket(t, ct, "denyCollection", []byte(q), nil, "hive:alice", "", false, gas, "Only owner can deny collection")
+	_, _, logs := CallMarket(t, ct, "denyCollection", []byte(q), nil, ownerAddress, "", true, gas, "")
+	AssertEventEmitted(t, logs, "collectionDenied")
+
+	res2, _, _ := CallMarket(t, ct, "isCollectionDenied", []byte(q), nil, "hive:anyone", "", true, gas, "")
+	assert.True(t, ParseCollectionDenied(res2))
+
+	CallMarket(t, ct, "allowCollection", []byte(q), nil, "hive:alice", "", false, gas, "Only owner can allow collection")
+	_, _, logs2 := CallMarket(t, ct, "allowCollection", []byte(q), nil, ownerAddress, "", true, gas, "")
+	AssertEventEmitted(t, logs2, "collectionAllowed")
+
+	res3, _, _ := CallMarket(t, ct, "isCollectionDenied", []byte(q), nil, "hive:anyone", "", true, gas, "")
+	assert.False(t, ParseCollectionDenied(res3))
 }

@@ -499,3 +499,33 @@ type AuctionCancelledAttributes struct {
 	AuctionId uint64 `json:"auctionId"`
 	Seller    string `json:"seller"`
 }
+
+type CollectionPayload struct {
+	NftContract string `json:"nftContract"`
+}
+
+type CollectionDeniedResponse struct {
+	Denied bool `json:"denied"`
+}
+
+type CollectionDeniedEvent struct {
+	Type       string                     `json:"type"`
+	Attributes CollectionDeniedAttributes `json:"attributes"`
+	Tx         string                     `json:"tx"`
+}
+
+type CollectionDeniedAttributes struct {
+	NftContract string `json:"nftContract"`
+	By          string `json:"by"`
+}
+
+type CollectionAllowedEvent struct {
+	Type       string                      `json:"type"`
+	Attributes CollectionAllowedAttributes `json:"attributes"`
+	Tx         string                      `json:"tx"`
+}
+
+type CollectionAllowedAttributes struct {
+	NftContract string `json:"nftContract"`
+	By          string `json:"by"`
+}

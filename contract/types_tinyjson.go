@@ -6181,3 +6181,125 @@ func tinyjsonGovEncodeOwnerTransferCancelled(out *jwriter.Writer, in OwnerTransf
 func (v OwnerTransferCancelledEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonGovEncodeOwnerTransferCancelled(w, v)
 }
+
+// ---- hand-added (sub-project A): denylist structs ----
+
+func tinyjsonGovDecodeCollectionPayload(in *jlexer.Lexer, out *CollectionPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "nftContract":
+			out.NftContract = string(in.String())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *CollectionPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonGovDecodeCollectionPayload(l, v)
+}
+
+func tinyjsonGovEncodeCollectionDeniedResponse(out *jwriter.Writer, in CollectionDeniedResponse) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"denied\":"
+		out.RawString(prefix[1:])
+		out.Bool(bool(in.Denied))
+	}
+	out.RawByte('}')
+}
+
+func (v CollectionDeniedResponse) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonGovEncodeCollectionDeniedResponse(w, v)
+}
+
+func tinyjsonGovEncodeCollectionDenied(out *jwriter.Writer, in CollectionDeniedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"nftContract\":"
+			out.RawString(p2[1:])
+			out.String(string(in.Attributes.NftContract))
+		}
+		{
+			const p2 string = ",\"by\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.By))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v CollectionDeniedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonGovEncodeCollectionDenied(w, v)
+}
+
+func tinyjsonGovEncodeCollectionAllowed(out *jwriter.Writer, in CollectionAllowedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"nftContract\":"
+			out.RawString(p2[1:])
+			out.String(string(in.Attributes.NftContract))
+		}
+		{
+			const p2 string = ",\"by\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.By))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v CollectionAllowedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonGovEncodeCollectionAllowed(w, v)
+}
