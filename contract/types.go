@@ -759,3 +759,100 @@ type SwapCancelledAttributes struct {
 	SwapId uint64 `json:"swapId"`
 	By     string `json:"by"`
 }
+
+// ===================================
+// E1: NFT Rental Types
+// ===================================
+
+type ListRentalPayload struct {
+	NftContract    string `json:"nftContract"`
+	TokenId        string `json:"tokenId"`
+	Amount         uint64 `json:"amount"`
+	PaymentToken   string `json:"paymentToken"`
+	PricePerBlock  string `json:"pricePerBlock"`
+	MinBlocks      uint64 `json:"minBlocks"`
+	MaxBlocks      uint64 `json:"maxBlocks"`
+}
+
+type RentPayload struct {
+	RentalId uint64 `json:"rentalId"`
+	Blocks   uint64 `json:"blocks"`
+}
+
+type RentalIdPayload struct {
+	RentalId uint64 `json:"rentalId"`
+}
+
+type ActiveRentalQuery struct {
+	Account     string `json:"account"`
+	NftContract string `json:"nftContract"`
+	TokenId     string `json:"tokenId"`
+}
+
+type RentalResponse struct {
+	RentalId      uint64 `json:"rentalId"`
+	Owner         string `json:"owner"`
+	NftContract   string `json:"nftContract"`
+	TokenId       string `json:"tokenId"`
+	Amount        uint64 `json:"amount"`
+	PaymentToken  string `json:"paymentToken"`
+	PricePerBlock string `json:"pricePerBlock"`
+	MinBlocks     uint64 `json:"minBlocks"`
+	MaxBlocks     uint64 `json:"maxBlocks"`
+	Active        bool   `json:"active"`
+	Renter        string `json:"renter"`
+	Until         uint64 `json:"until"`
+	Rented        bool   `json:"rented"`
+}
+
+type ActiveRentalResponse struct {
+	Active bool   `json:"active"`
+	Until  uint64 `json:"until"`
+}
+
+type RentalListedEvent struct {
+	Type       string                   `json:"type"`
+	Attributes RentalListedAttributes   `json:"attributes"`
+	Tx         string                   `json:"tx"`
+}
+
+type RentalListedAttributes struct {
+	RentalId    uint64 `json:"rentalId"`
+	Owner       string `json:"owner"`
+	NftContract string `json:"nftContract"`
+	TokenId     string `json:"tokenId"`
+}
+
+type RentedEvent struct {
+	Type       string           `json:"type"`
+	Attributes RentedAttributes `json:"attributes"`
+	Tx         string           `json:"tx"`
+}
+
+type RentedAttributes struct {
+	RentalId uint64 `json:"rentalId"`
+	Renter   string `json:"renter"`
+	Until    uint64 `json:"until"`
+}
+
+type RentalEndedEvent struct {
+	Type       string                `json:"type"`
+	Attributes RentalEndedAttributes `json:"attributes"`
+	Tx         string                `json:"tx"`
+}
+
+type RentalEndedAttributes struct {
+	RentalId uint64 `json:"rentalId"`
+	By       string `json:"by"`
+}
+
+type RentalDelistedEvent struct {
+	Type       string                   `json:"type"`
+	Attributes RentalDelistedAttributes `json:"attributes"`
+	Tx         string                   `json:"tx"`
+}
+
+type RentalDelistedAttributes struct {
+	RentalId uint64 `json:"rentalId"`
+	Owner    string `json:"owner"`
+}

@@ -522,6 +522,68 @@ func setSwapMoney(id uint64, field string, v *big.Int) { setMoneyState(swapKey(i
 func getSwapMoney(id uint64, field string) *big.Int    { return getMoneyState(swapKey(id, field)) }
 
 // ===================================
+// Rental State Helpers (E1)
+// ===================================
+
+func rentalKey(id uint64, field string) string {
+	return "rnt|" + strconv.FormatUint(id, 10) + "|" + field
+}
+
+func setRentalField(id uint64, field, value string) {
+	sdk.StateSetObject(rentalKey(id, field), value)
+}
+
+func getRentalField(id uint64, field string) string {
+	return getStringState(rentalKey(id, field))
+}
+
+func getRentalUint64(id uint64, field string) uint64 {
+	return getUint64State(rentalKey(id, field))
+}
+
+func setRentalUint64(id uint64, field string, val uint64) {
+	setUint64State(rentalKey(id, field), val)
+}
+
+func getNextRentalId() uint64 {
+	return getUint64State("nxt_rnt")
+}
+
+func setNextRentalId(id uint64) {
+	setUint64State("nxt_rnt", id)
+}
+
+// snapshotRoyaltySplitsForRental mirrors snapshotRoyaltySplitsForListing using rentalKey prefix.
+func snapshotRoyaltySplitsForRental(id uint64, recips []string, bpss []uint64) {
+	n := uint64(len(recips))
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		setRentalField(id, "rs_"+is+"_r", recips[i])
+		setRentalUint64(id, "rs_"+is+"_b", bpss[i])
+	}
+	setRentalUint64(id, "rs_n", n)
+}
+
+// loadRentalRoyaltySplitSnapshot mirrors loadListingRoyaltySplitSnapshot using rentalKey prefix.
+func loadRentalRoyaltySplitSnapshot(id uint64, fallbackRecip string, fallbackBps uint64) ([]string, []uint64) {
+	n := getRentalUint64(id, "rs_n")
+	if n > 0 {
+		recips := make([]string, n)
+		bpss := make([]uint64, n)
+		for i := uint64(0); i < n; i++ {
+			is := strconv.FormatUint(i, 10)
+			recips[i] = getRentalField(id, "rs_"+is+"_r")
+			bpss[i] = getRentalUint64(id, "rs_"+is+"_b")
+		}
+		return recips, bpss
+	}
+	if fallbackBps > 0 && fallbackRecip != "" {
+		return []string{fallbackRecip}, []uint64{fallbackBps}
+	}
+	return []string{}, []uint64{}
+}
+
+// ===================================
 // Min Offer Helpers
 // ===================================
 

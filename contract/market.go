@@ -1928,3 +1928,348 @@ func GetEffectiveFee(payload *string) *string {
 	return jsonResponse(&EffectiveFeeResponse{FeeBps: getEffectiveFeeBps(p.NftContract)})
 }
 
+// ===================================
+// E1: NFT Rental Functions
+// ===================================
+
+//go:wasmexport listRental
+func ListRental(payload *string) *string {
+	assertInit()
+	assertNotPaused()
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p ListRentalPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if p.NftContract == "" || p.TokenId == "" || p.PaymentToken == "" {
+		sdk.Abort("NFT contract, token ID, and payment token required")
+	}
+	if p.Amount == 0 {
+		sdk.Abort("Amount must be greater than zero")
+	}
+
+	ppb := parseMoney(p.PricePerBlock)
+	if mIsZero(ppb) {
+		sdk.Abort("Price per block must be greater than zero")
+	}
+
+	if p.MinBlocks == 0 || p.MinBlocks > p.MaxBlocks {
+		sdk.Abort("Invalid block range")
+	}
+
+	assertPaymentTokenAllowed(p.PaymentToken)
+	assertCollectionAllowed(p.NftContract)
+
+	if nftIsSoulbound(p.NftContract, p.TokenId) {
+		sdk.Abort("Cannot list soulbound tokens")
+	}
+
+	contractAddr := getContractAddress()
+	if !nftIsApprovedForAll(p.NftContract, caller, contractAddr) {
+		sdk.Abort("Marketplace not approved as operator for this NFT collection")
+	}
+	if nftBalanceOf(p.NftContract, caller, p.TokenId) < p.Amount {
+		sdk.Abort("Insufficient NFT balance to list")
+	}
+
+	feeBps := getEffectiveFeeBps(p.NftContract)
+	royaltyBps := getRoyaltyBps(p.NftContract)
+	if feeBps+royaltyBps > 10000 {
+		sdk.Abort("Combined fee and royalty exceed 100%")
+	}
+
+	id := getNextRentalId()
+	setRentalField(id, "o", caller)
+	setRentalField(id, "nc", p.NftContract)
+	setRentalField(id, "ti", p.TokenId)
+	setRentalUint64(id, "amt", p.Amount)
+	setRentalField(id, "pt", p.PaymentToken)
+	setRentalMoney(id, "ppb", ppb)
+	setRentalUint64(id, "minb", p.MinBlocks)
+	setRentalUint64(id, "maxb", p.MaxBlocks)
+	setRentalField(id, "act", "1")
+	setRentalField(id, "rby", "")
+	setRentalUint64(id, "until", 0)
+	setRentalField(id, "rented", "0")
+	setRentalUint64(id, "fb", feeBps)
+	setRentalField(id, "rr", getRoyaltyRecipient(p.NftContract))
+	setRentalUint64(id, "rb", royaltyBps)
+
+	// Snapshot resolved royalty splits so in-flight rentals are unaffected by later split changes.
+	snapRecips, snapBps := resolveRoyaltySplits(p.NftContract)
+	snapshotRoyaltySplitsForRental(id, snapRecips, snapBps)
+	setNextRentalId(id + 1)
+
+	emitRentalListed(id, caller, p.NftContract, p.TokenId)
+	return jsonResponse(&CreatedResponse{Success: true, Id: id})
+}
+
+//go:wasmexport rent
+func Rent(payload *string) *string {
+	assertInit()
+	assertNotPaused()
+
+	renter := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p RentPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if getRentalField(p.RentalId, "act") != "1" {
+		sdk.Abort("Rental not active")
+	}
+	if getRentalField(p.RentalId, "rented") == "1" {
+		sdk.Abort("Already rented")
+	}
+
+	minBlocks := getRentalUint64(p.RentalId, "minb")
+	maxBlocks := getRentalUint64(p.RentalId, "maxb")
+	if p.Blocks < minBlocks || p.Blocks > maxBlocks {
+		sdk.Abort("Blocks out of range")
+	}
+
+	nc := getRentalField(p.RentalId, "nc")
+	assertCollectionAllowed(nc)
+
+	owner := getRentalField(p.RentalId, "o")
+	if renter == owner {
+		sdk.Abort("Owner cannot rent own listing")
+	}
+
+	pt := getRentalField(p.RentalId, "pt")
+	ti := getRentalField(p.RentalId, "ti")
+	amt := getRentalUint64(p.RentalId, "amt")
+	lockedFeeBps := getRentalUint64(p.RentalId, "fb")
+	lockedRoyaltyBps := getRentalUint64(p.RentalId, "rb")
+	royaltyRecipient := getRentalField(p.RentalId, "rr")
+
+	cost := mMulU64(getRentalMoney(p.RentalId, "ppb"), p.Blocks)
+	received := escrowIn(pt, renter, cost)
+
+	// Escrow NFT from owner into market contract.
+	contractAddr := getContractAddress()
+	nftSafeTransferFrom(nc, owner, contractAddr, ti, amt)
+
+	// Load royalty split snapshot; fall back to legacy single-entry for pre-E1 in-flight entries.
+	snapRecips, snapBps := loadRentalRoyaltySplitSnapshot(p.RentalId, royaltyRecipient, lockedRoyaltyBps)
+	fee, _, ownerPay := feeAndRoyaltyOf(received, lockedFeeBps, snapRecips, snapBps)
+
+	if !mIsZero(fee) {
+		tokenTransferBig(pt, getFeeRecipient(), fee)
+	}
+	distributeRoyaltySplitsResolved(pt, received, snapRecips, snapBps)
+	if !mIsZero(ownerPay) {
+		tokenTransferBig(pt, owner, ownerPay)
+	}
+
+	until := getCurrentBlockHeight() + p.Blocks
+	setRentalField(p.RentalId, "rby", renter)
+	setRentalUint64(p.RentalId, "until", until)
+	setRentalField(p.RentalId, "rented", "1")
+
+	// Index: ract|<nc>|<ti>|<renter> = until
+	setUint64State("ract|"+nc+"|"+ti+"|"+renter, until)
+
+	emitRented(p.RentalId, renter, until)
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport endRental
+func EndRental(payload *string) *string {
+	assertInit()
+	// Works while paused — recovery path (mirrors CancelAuction).
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p RentalIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if getRentalField(p.RentalId, "rented") != "1" {
+		sdk.Abort("Not currently rented")
+	}
+
+	until := getRentalUint64(p.RentalId, "until")
+	if getCurrentBlockHeight() < until {
+		sdk.Abort("Rental term not over")
+	}
+
+	nc := getRentalField(p.RentalId, "nc")
+	ti := getRentalField(p.RentalId, "ti")
+	amt := getRentalUint64(p.RentalId, "amt")
+	owner := getRentalField(p.RentalId, "o")
+	prevRenter := getRentalField(p.RentalId, "rby")
+	contractAddr := getContractAddress()
+
+	// Return escrowed NFT from market to owner.
+	nftSafeTransferFrom(nc, contractAddr, owner, ti, amt)
+
+	setRentalField(p.RentalId, "rented", "0")
+	setRentalField(p.RentalId, "rby", "")
+
+	// Delete active rental index.
+	sdk.StateDeleteObject("ract|" + nc + "|" + ti + "|" + prevRenter)
+
+	emitRentalEnded(p.RentalId, getCaller())
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport endRentalEarly
+func EndRentalEarly(payload *string) *string {
+	assertInit()
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p RentalIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if getRentalField(p.RentalId, "rented") != "1" {
+		sdk.Abort("Not currently rented")
+	}
+
+	if caller != getRentalField(p.RentalId, "rby") {
+		sdk.Abort("Only renter can end early")
+	}
+
+	nc := getRentalField(p.RentalId, "nc")
+	ti := getRentalField(p.RentalId, "ti")
+	amt := getRentalUint64(p.RentalId, "amt")
+	owner := getRentalField(p.RentalId, "o")
+	contractAddr := getContractAddress()
+
+	// Return escrowed NFT from market to owner. No refund of unused term.
+	nftSafeTransferFrom(nc, contractAddr, owner, ti, amt)
+
+	setRentalField(p.RentalId, "rented", "0")
+	setRentalField(p.RentalId, "rby", "")
+
+	// Delete active rental index.
+	sdk.StateDeleteObject("ract|" + nc + "|" + ti + "|" + caller)
+
+	emitRentalEnded(p.RentalId, caller)
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport delistRental
+func DelistRental(payload *string) *string {
+	assertInit()
+	// Works while paused — recovery path (mirrors Delist).
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p RentalIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if getRentalField(p.RentalId, "act") != "1" {
+		sdk.Abort("Rental not active")
+	}
+	if caller != getRentalField(p.RentalId, "o") {
+		sdk.Abort("Only owner can delist rental")
+	}
+	if getRentalField(p.RentalId, "rented") == "1" {
+		sdk.Abort("Cannot delist while rented")
+	}
+
+	// No NFT movement needed — approval-custody, nothing escrowed when not rented.
+	setRentalField(p.RentalId, "act", "0")
+
+	emitRentalDelisted(p.RentalId, caller)
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport getRental
+func GetRental(payload *string) *string {
+	assertInit()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p RentalIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	owner := getRentalField(p.RentalId, "o")
+	if owner == "" {
+		sdk.Abort("Rental not found")
+	}
+
+	return jsonResponse(&RentalResponse{
+		RentalId:      p.RentalId,
+		Owner:         owner,
+		NftContract:   getRentalField(p.RentalId, "nc"),
+		TokenId:       getRentalField(p.RentalId, "ti"),
+		Amount:        getRentalUint64(p.RentalId, "amt"),
+		PaymentToken:  getRentalField(p.RentalId, "pt"),
+		PricePerBlock: formatMoney(getRentalMoney(p.RentalId, "ppb")),
+		MinBlocks:     getRentalUint64(p.RentalId, "minb"),
+		MaxBlocks:     getRentalUint64(p.RentalId, "maxb"),
+		Active:        getRentalField(p.RentalId, "act") == "1",
+		Renter:        getRentalField(p.RentalId, "rby"),
+		Until:         getRentalUint64(p.RentalId, "until"),
+		Rented:        getRentalField(p.RentalId, "rented") == "1",
+	})
+}
+
+//go:wasmexport getActiveRentalOf
+func GetActiveRentalOf(payload *string) *string {
+	assertInit()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p ActiveRentalQuery
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	u := getUint64State("ract|" + p.NftContract + "|" + p.TokenId + "|" + p.Account)
+	if u != 0 && getCurrentBlockHeight() < u {
+		return jsonResponse(&ActiveRentalResponse{Active: true, Until: u})
+	}
+	return jsonResponse(&ActiveRentalResponse{Active: false, Until: 0})
+}
+

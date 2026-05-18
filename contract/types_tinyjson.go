@@ -7380,3 +7380,427 @@ func tinyjsonD1EncodeSwapCancelledEvent(out *jwriter.Writer, in SwapCancelledEve
 func (v SwapCancelledEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonD1EncodeSwapCancelledEvent(w, v)
 }
+
+// ===================================
+// E1: NFT Rental tinyjson (hand-written)
+// ===================================
+
+// ListRentalPayload decode
+func tinyjsonE1DecodeListRentalPayload(in *jlexer.Lexer, out *ListRentalPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "nftContract":
+			out.NftContract = string(in.String())
+		case "tokenId":
+			out.TokenId = string(in.String())
+		case "amount":
+			out.Amount = uint64(in.Uint64())
+		case "paymentToken":
+			out.PaymentToken = string(in.String())
+		case "pricePerBlock":
+			out.PricePerBlock = string(in.String())
+		case "minBlocks":
+			out.MinBlocks = uint64(in.Uint64())
+		case "maxBlocks":
+			out.MaxBlocks = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *ListRentalPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonE1DecodeListRentalPayload(l, v)
+}
+
+// RentPayload decode
+func tinyjsonE1DecodeRentPayload(in *jlexer.Lexer, out *RentPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "rentalId":
+			out.RentalId = uint64(in.Uint64())
+		case "blocks":
+			out.Blocks = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *RentPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonE1DecodeRentPayload(l, v)
+}
+
+// RentalIdPayload decode
+func tinyjsonE1DecodeRentalIdPayload(in *jlexer.Lexer, out *RentalIdPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "rentalId":
+			out.RentalId = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *RentalIdPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonE1DecodeRentalIdPayload(l, v)
+}
+
+// ActiveRentalQuery decode
+func tinyjsonE1DecodeActiveRentalQuery(in *jlexer.Lexer, out *ActiveRentalQuery) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "account":
+			out.Account = string(in.String())
+		case "nftContract":
+			out.NftContract = string(in.String())
+		case "tokenId":
+			out.TokenId = string(in.String())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *ActiveRentalQuery) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonE1DecodeActiveRentalQuery(l, v)
+}
+
+// RentalResponse encode
+func tinyjsonE1EncodeRentalResponse(out *jwriter.Writer, in RentalResponse) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"rentalId\":"
+		out.RawString(prefix[1:])
+		out.Uint64(uint64(in.RentalId))
+	}
+	{
+		const prefix string = ",\"owner\":"
+		out.RawString(prefix)
+		out.String(string(in.Owner))
+	}
+	{
+		const prefix string = ",\"nftContract\":"
+		out.RawString(prefix)
+		out.String(string(in.NftContract))
+	}
+	{
+		const prefix string = ",\"tokenId\":"
+		out.RawString(prefix)
+		out.String(string(in.TokenId))
+	}
+	{
+		const prefix string = ",\"amount\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.Amount))
+	}
+	{
+		const prefix string = ",\"paymentToken\":"
+		out.RawString(prefix)
+		out.String(string(in.PaymentToken))
+	}
+	{
+		const prefix string = ",\"pricePerBlock\":"
+		out.RawString(prefix)
+		out.String(string(in.PricePerBlock))
+	}
+	{
+		const prefix string = ",\"minBlocks\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.MinBlocks))
+	}
+	{
+		const prefix string = ",\"maxBlocks\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.MaxBlocks))
+	}
+	{
+		const prefix string = ",\"active\":"
+		out.RawString(prefix)
+		out.Bool(bool(in.Active))
+	}
+	{
+		const prefix string = ",\"renter\":"
+		out.RawString(prefix)
+		out.String(string(in.Renter))
+	}
+	{
+		const prefix string = ",\"until\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.Until))
+	}
+	{
+		const prefix string = ",\"rented\":"
+		out.RawString(prefix)
+		out.Bool(bool(in.Rented))
+	}
+	out.RawByte('}')
+}
+
+func (v RentalResponse) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonE1EncodeRentalResponse(w, v)
+}
+
+// ActiveRentalResponse encode
+func tinyjsonE1EncodeActiveRentalResponse(out *jwriter.Writer, in ActiveRentalResponse) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"active\":"
+		out.RawString(prefix[1:])
+		out.Bool(bool(in.Active))
+	}
+	{
+		const prefix string = ",\"until\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.Until))
+	}
+	out.RawByte('}')
+}
+
+func (v ActiveRentalResponse) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonE1EncodeActiveRentalResponse(w, v)
+}
+
+// RentalListedEvent encode
+func tinyjsonE1EncodeRentalListedEvent(out *jwriter.Writer, in RentalListedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"rentalId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.RentalId))
+		}
+		{
+			const p2 string = ",\"owner\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Owner))
+		}
+		{
+			const p2 string = ",\"nftContract\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.NftContract))
+		}
+		{
+			const p2 string = ",\"tokenId\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.TokenId))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v RentalListedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonE1EncodeRentalListedEvent(w, v)
+}
+
+// RentedEvent encode
+func tinyjsonE1EncodeRentedEvent(out *jwriter.Writer, in RentedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"rentalId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.RentalId))
+		}
+		{
+			const p2 string = ",\"renter\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Renter))
+		}
+		{
+			const p2 string = ",\"until\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Until))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v RentedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonE1EncodeRentedEvent(w, v)
+}
+
+// RentalEndedEvent encode
+func tinyjsonE1EncodeRentalEndedEvent(out *jwriter.Writer, in RentalEndedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"rentalId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.RentalId))
+		}
+		{
+			const p2 string = ",\"by\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.By))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v RentalEndedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonE1EncodeRentalEndedEvent(w, v)
+}
+
+// RentalDelistedEvent encode
+func tinyjsonE1EncodeRentalDelistedEvent(out *jwriter.Writer, in RentalDelistedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"rentalId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.RentalId))
+		}
+		{
+			const p2 string = ",\"owner\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Owner))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v RentalDelistedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonE1EncodeRentalDelistedEvent(w, v)
+}

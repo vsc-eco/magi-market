@@ -82,3 +82,5 @@ func setAuctionMoney(id uint64, field string, v *big.Int) { setMoneyState(auctio
 func getAuctionMoney(id uint64, field string) *big.Int    { return getMoneyState(auctionKey(id, field)) }
 func setBundleMoney(id uint64, field string, v *big.Int)  { setMoneyState(bundleKey(id, field), v) }
 func getBundleMoney(id uint64, field string) *big.Int     { return getMoneyState(bundleKey(id, field)) }
+func setRentalMoney(id uint64, field string, v *big.Int)  { setMoneyState(rentalKey(id, field), v) }
+func getRentalMoney(id uint64, field string) *big.Int     { return getMoneyState(rentalKey(id, field)) }

@@ -417,3 +417,57 @@ func emitSwapCancelled(swapId uint64, by string) {
 	event.MarshalTinyJSON(&w)
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
+
+// ===================================
+// E1: NFT Rental Events
+// ===================================
+
+func emitRentalListed(rentalId uint64, owner, nftContract, tokenId string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := RentalListedEvent{
+		Type: "rentalListed",
+		Attributes: RentalListedAttributes{
+			RentalId: rentalId, Owner: owner, NftContract: nftContract, TokenId: tokenId,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitRented(rentalId uint64, renter string, until uint64) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := RentedEvent{
+		Type:       "rented",
+		Attributes: RentedAttributes{RentalId: rentalId, Renter: renter, Until: until},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitRentalEnded(rentalId uint64, by string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := RentalEndedEvent{
+		Type:       "rentalEnded",
+		Attributes: RentalEndedAttributes{RentalId: rentalId, By: by},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitRentalDelisted(rentalId uint64, owner string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := RentalDelistedEvent{
+		Type:       "rentalDelisted",
+		Attributes: RentalDelistedAttributes{RentalId: rentalId, Owner: owner},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
