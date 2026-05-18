@@ -22,6 +22,13 @@ var _ = embed.FS{}
 const MarketContractID = "market"
 const TokenID = "paytoken"
 const NftContractID = "nft"
+
+// FeeTokenID is the fee-on-transfer mock's contract id. The marketplace passes
+// the configured paymentToken string verbatim as the cross-contract call
+// target id (no "contract:" prefix stripping in go-vsc-node's
+// GetContractFromDb), so the contract must be REGISTERED under the exact
+// "contract:feetoken" string the tests use as the paymentToken.
+const FeeTokenID = "contract:feetoken"
 const ownerAddress = "hive:tibfox"
 const feeRecipientAddress = "hive:feerecipient"
 
@@ -39,6 +46,9 @@ var TokenWasm []byte
 //go:embed artifacts/nft.wasm
 var NftWasm []byte
 
+//go:embed artifacts/feetoken.wasm
+var FeeTokenWasm []byte
+
 const defaultTimestamp = "2025-09-03T00:00:00"
 
 const gas = uint(500_000_000)
@@ -50,6 +60,7 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct.RegisterContract(MarketContractID, ownerAddress, MarketWasm)
 	ct.RegisterContract(TokenID, ownerAddress, TokenWasm)
 	ct.RegisterContract(NftContractID, ownerAddress, NftWasm)
+	ct.RegisterContract(FeeTokenID, ownerAddress, FeeTokenWasm)
 	return &ct
 }
 
