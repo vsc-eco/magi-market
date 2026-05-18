@@ -44,6 +44,13 @@ const UtxoMockID = "contract:utxomock"
 // magi-market's raw-read tokenBalanceOf works for balance-delta accounting.
 const DexMockID = "contract:dexmock"
 
+// MintNftMockID is the editioned-NFT mock's contract id. Models the
+// magi_nft-contract post-feature delegated-mint ABI documented in spec
+// 2026-05-18-editioned-nft-define-delegated-mint-design.md. Used by G1/G2
+// mint-spot tests to prove the market side against the documented ABI without
+// requiring the real nft contract to implement the feature first.
+const MintNftMockID = "mintnftmock"
+
 const ownerAddress = "hive:tibfox"
 const feeRecipientAddress = "hive:feerecipient"
 
@@ -70,6 +77,9 @@ var UtxoMockWasm []byte
 //go:embed artifacts/dexmock.wasm
 var DexMockWasm []byte
 
+//go:embed artifacts/mintnftmock.wasm
+var MintNftMockWasm []byte
+
 const defaultTimestamp = "2025-09-03T00:00:00"
 
 const gas = uint(500_000_000)
@@ -84,6 +94,7 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct.RegisterContract(FeeTokenID, ownerAddress, FeeTokenWasm)
 	ct.RegisterContract(UtxoMockID, ownerAddress, UtxoMockWasm)
 	ct.RegisterContract(DexMockID, ownerAddress, DexMockWasm)
+	ct.RegisterContract(MintNftMockID, ownerAddress, MintNftMockWasm)
 	return &ct
 }
 
