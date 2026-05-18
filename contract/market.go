@@ -1621,6 +1621,234 @@ func IsCollectionDenied(payload *string) *string {
 }
 
 // ===================================
+// D1: NFT-for-NFT Swap Functions
+// ===================================
+
+//go:wasmexport proposeSwap
+func ProposeSwap(payload *string) *string {
+	assertInit()
+	assertNotPaused()
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p ProposeSwapPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if p.OfferedNft == "" || p.OfferedTokenId == "" {
+		sdk.Abort("Offered NFT and token ID required")
+	}
+	if p.WantedNft == "" || p.WantedTokenId == "" {
+		sdk.Abort("Wanted NFT and token ID required")
+	}
+	if p.OfferedAmount == 0 {
+		sdk.Abort("Offered amount must be greater than zero")
+	}
+	if p.WantedAmount == 0 {
+		sdk.Abort("Wanted amount must be greater than zero")
+	}
+
+	assertCollectionAllowed(p.OfferedNft)
+
+	// Proposer preflight on offered NFT
+	contractAddr := getContractAddress()
+	if !nftIsApprovedForAll(p.OfferedNft, caller, contractAddr) {
+		sdk.Abort("Marketplace not approved as operator for this NFT collection")
+	}
+	if nftBalanceOf(p.OfferedNft, caller, p.OfferedTokenId) < p.OfferedAmount {
+		sdk.Abort("Insufficient NFT balance")
+	}
+
+	// TopUp validation: topUp may be "0"; if > 0 require TopUpToken + assertPaymentTokenAllowed
+	topUp := parseMoney(p.TopUp)
+	if !mIsZero(topUp) {
+		if p.TopUpToken == "" {
+			sdk.Abort("TopUpToken required when topUp > 0")
+		}
+		assertPaymentTokenAllowed(p.TopUpToken)
+	}
+
+	// Store swap state — NO escrow at propose (top-up pulled only at accept)
+	id := getNextSwapId()
+	setSwapField(id, "p", caller)
+	setSwapField(id, "on", p.OfferedNft)
+	setSwapField(id, "oti", p.OfferedTokenId)
+	setSwapUint64(id, "oa", p.OfferedAmount)
+	setSwapField(id, "wn", p.WantedNft)
+	setSwapField(id, "wti", p.WantedTokenId)
+	setSwapUint64(id, "wa", p.WantedAmount)
+	setSwapMoney(id, "tu", topUp)
+	setSwapField(id, "tt", p.TopUpToken)
+	setSwapField(id, "act", "1")
+	setSwapUint64(id, "exp", p.ExpirationBlock)
+	setNextSwapId(id + 1)
+
+	emitSwapProposed(id, caller, p.OfferedNft, p.WantedNft)
+	return jsonResponse(&CreatedResponse{Success: true, Id: id})
+}
+
+//go:wasmexport acceptSwap
+func AcceptSwap(payload *string) *string {
+	assertInit()
+	assertNotPaused()
+
+	acceptor := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p SwapIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if !isSwapActive(p.SwapId) {
+		sdk.Abort("Swap not active")
+	}
+	if isExpired(getSwapUint64(p.SwapId, "exp")) {
+		sdk.Abort("Swap has expired")
+	}
+
+	proposer := getSwapField(p.SwapId, "p")
+	if acceptor == proposer {
+		sdk.Abort("Cannot accept own swap")
+	}
+
+	on := getSwapField(p.SwapId, "on")   // offered NFT
+	oti := getSwapField(p.SwapId, "oti") // offered token id
+	oa := getSwapUint64(p.SwapId, "oa")  // offered amount
+	wn := getSwapField(p.SwapId, "wn")   // wanted NFT
+	wti := getSwapField(p.SwapId, "wti") // wanted token id
+	wa := getSwapUint64(p.SwapId, "wa")  // wanted amount
+	tu := getSwapMoney(p.SwapId, "tu")   // topUp money
+	tt := getSwapField(p.SwapId, "tt")   // topUp token
+
+	// Both collections must pass denylist check
+	assertCollectionAllowed(on)
+	assertCollectionAllowed(wn)
+
+	// Preflight: proposer still holds + approved for offered NFT
+	mkt := getContractAddress()
+	if !nftIsApprovedForAll(on, proposer, mkt) {
+		sdk.Abort("Proposer no longer holds offered NFT")
+	}
+	if nftBalanceOf(on, proposer, oti) < oa {
+		sdk.Abort("Proposer no longer holds offered NFT")
+	}
+
+	// Preflight: acceptor holds + approved for wanted NFT
+	if !nftIsApprovedForAll(wn, acceptor, mkt) {
+		sdk.Abort("Marketplace not approved as operator for this NFT collection")
+	}
+	if nftBalanceOf(wn, acceptor, wti) < wa {
+		sdk.Abort("Insufficient NFT balance")
+	}
+
+	// TopUp escrow + fee distribution (order: escrow+pay, then both NFT legs)
+	// Any abort reverts the whole tx → atomic
+	if !mIsZero(tu) {
+		received := escrowIn(tt, proposer, tu)
+		// fee using effective fee bps for offered NFT collection; nil,nil → no royalty on barter
+		fee, _, acceptorPay := feeAndRoyaltyOf(received, getEffectiveFeeBps(on), nil, nil)
+		if !mIsZero(fee) {
+			tokenTransferBig(tt, getFeeRecipient(), fee)
+		}
+		if !mIsZero(acceptorPay) {
+			tokenTransferBig(tt, acceptor, acceptorPay)
+		}
+	}
+
+	// Both NFT legs — any abort reverts whole tx
+	nftSafeTransferFrom(on, proposer, acceptor, oti, oa)
+	nftSafeTransferFrom(wn, acceptor, proposer, wti, wa)
+
+	setSwapField(p.SwapId, "act", "0")
+	emitSwapAccepted(p.SwapId, proposer, acceptor)
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport cancelSwap
+func CancelSwap(payload *string) *string {
+	assertInit()
+	// Note: cancelSwap works even when paused (like CancelOffer), so proposers can
+	// cancel swaps freely during a contract pause. No escrow to refund.
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p SwapIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if !isSwapActive(p.SwapId) {
+		sdk.Abort("Swap not active")
+	}
+
+	proposer := getSwapField(p.SwapId, "p")
+	expBlock := getSwapUint64(p.SwapId, "exp")
+	// Allow cancel if caller is proposer OR swap is expired
+	if !isExpired(expBlock) && caller != proposer {
+		sdk.Abort("Only proposer can cancel swap")
+	}
+
+	setSwapField(p.SwapId, "act", "0")
+	emitSwapCancelled(p.SwapId, caller)
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport getSwap
+func GetSwap(payload *string) *string {
+	assertInit()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p SwapIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	proposer := getSwapField(p.SwapId, "p")
+	if proposer == "" {
+		sdk.Abort("Swap not found")
+	}
+
+	return jsonResponse(&SwapResponse{
+		SwapId:          p.SwapId,
+		Proposer:        proposer,
+		OfferedNft:      getSwapField(p.SwapId, "on"),
+		OfferedTokenId:  getSwapField(p.SwapId, "oti"),
+		OfferedAmount:   getSwapUint64(p.SwapId, "oa"),
+		WantedNft:       getSwapField(p.SwapId, "wn"),
+		WantedTokenId:   getSwapField(p.SwapId, "wti"),
+		WantedAmount:    getSwapUint64(p.SwapId, "wa"),
+		TopUp:           formatMoney(getSwapMoney(p.SwapId, "tu")),
+		TopUpToken:      getSwapField(p.SwapId, "tt"),
+		Active:          isSwapActive(p.SwapId),
+		ExpirationBlock: getSwapUint64(p.SwapId, "exp"),
+	})
+}
+
+// ===================================
 // B3: Per-Collection Fee Override Functions
 // ===================================
 

@@ -688,3 +688,74 @@ type BundleDelistedAttributes struct {
 	BundleId uint64 `json:"bundleId"`
 	Seller   string `json:"seller"`
 }
+
+// ===================================
+// D1: NFT-for-NFT Swap Types
+// ===================================
+
+type ProposeSwapPayload struct {
+	OfferedNft      string `json:"offeredNft"`
+	OfferedTokenId  string `json:"offeredTokenId"`
+	OfferedAmount   uint64 `json:"offeredAmount"`
+	WantedNft       string `json:"wantedNft"`
+	WantedTokenId   string `json:"wantedTokenId"`
+	WantedAmount    uint64 `json:"wantedAmount"`
+	TopUp           string `json:"topUp"`
+	TopUpToken      string `json:"topUpToken"`
+	ExpirationBlock uint64 `json:"expirationBlock"`
+}
+
+type SwapIdPayload struct {
+	SwapId uint64 `json:"swapId"`
+}
+
+type SwapResponse struct {
+	SwapId          uint64 `json:"swapId"`
+	Proposer        string `json:"proposer"`
+	OfferedNft      string `json:"offeredNft"`
+	OfferedTokenId  string `json:"offeredTokenId"`
+	OfferedAmount   uint64 `json:"offeredAmount"`
+	WantedNft       string `json:"wantedNft"`
+	WantedTokenId   string `json:"wantedTokenId"`
+	WantedAmount    uint64 `json:"wantedAmount"`
+	TopUp           string `json:"topUp"`
+	TopUpToken      string `json:"topUpToken"`
+	Active          bool   `json:"active"`
+	ExpirationBlock uint64 `json:"expirationBlock"`
+}
+
+type SwapProposedEvent struct {
+	Type       string                `json:"type"`
+	Attributes SwapProposedAttributes `json:"attributes"`
+	Tx         string                `json:"tx"`
+}
+
+type SwapProposedAttributes struct {
+	SwapId     uint64 `json:"swapId"`
+	Proposer   string `json:"proposer"`
+	OfferedNft string `json:"offeredNft"`
+	WantedNft  string `json:"wantedNft"`
+}
+
+type SwapAcceptedEvent struct {
+	Type       string                 `json:"type"`
+	Attributes SwapAcceptedAttributes `json:"attributes"`
+	Tx         string                 `json:"tx"`
+}
+
+type SwapAcceptedAttributes struct {
+	SwapId   uint64 `json:"swapId"`
+	Proposer string `json:"proposer"`
+	Acceptor string `json:"acceptor"`
+}
+
+type SwapCancelledEvent struct {
+	Type       string                  `json:"type"`
+	Attributes SwapCancelledAttributes `json:"attributes"`
+	Tx         string                  `json:"tx"`
+}
+
+type SwapCancelledAttributes struct {
+	SwapId uint64 `json:"swapId"`
+	By     string `json:"by"`
+}

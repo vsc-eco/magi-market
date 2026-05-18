@@ -7093,3 +7093,290 @@ func tinyjsonC3EncodeBundleDelistedEvent(out *jwriter.Writer, in BundleDelistedE
 func (v BundleDelistedEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonC3EncodeBundleDelistedEvent(w, v)
 }
+
+// ---- hand-added (sub-project D1): NFT-for-NFT swap structs ----
+
+// ProposeSwapPayload decode (input: offeredNft, offeredTokenId, offeredAmount, wantedNft,
+// wantedTokenId, wantedAmount, topUp, topUpToken, expirationBlock)
+func tinyjsonD1DecodeProposeSwapPayload(in *jlexer.Lexer, out *ProposeSwapPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "offeredNft":
+			out.OfferedNft = string(in.String())
+		case "offeredTokenId":
+			out.OfferedTokenId = string(in.String())
+		case "offeredAmount":
+			out.OfferedAmount = uint64(in.Uint64())
+		case "wantedNft":
+			out.WantedNft = string(in.String())
+		case "wantedTokenId":
+			out.WantedTokenId = string(in.String())
+		case "wantedAmount":
+			out.WantedAmount = uint64(in.Uint64())
+		case "topUp":
+			out.TopUp = string(in.String())
+		case "topUpToken":
+			out.TopUpToken = string(in.String())
+		case "expirationBlock":
+			out.ExpirationBlock = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *ProposeSwapPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonD1DecodeProposeSwapPayload(l, v)
+}
+
+// SwapIdPayload decode (input: swapId uint64)
+func tinyjsonD1DecodeSwapIdPayload(in *jlexer.Lexer, out *SwapIdPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "swapId":
+			out.SwapId = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *SwapIdPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonD1DecodeSwapIdPayload(l, v)
+}
+
+// SwapResponse encode (output: swapId, proposer, offeredNft, offeredTokenId, offeredAmount,
+// wantedNft, wantedTokenId, wantedAmount, topUp, topUpToken, active, expirationBlock)
+func tinyjsonD1EncodeSwapResponse(out *jwriter.Writer, in SwapResponse) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"swapId\":"
+		out.RawString(prefix[1:])
+		out.Uint64(uint64(in.SwapId))
+	}
+	{
+		const prefix string = ",\"proposer\":"
+		out.RawString(prefix)
+		out.String(string(in.Proposer))
+	}
+	{
+		const prefix string = ",\"offeredNft\":"
+		out.RawString(prefix)
+		out.String(string(in.OfferedNft))
+	}
+	{
+		const prefix string = ",\"offeredTokenId\":"
+		out.RawString(prefix)
+		out.String(string(in.OfferedTokenId))
+	}
+	{
+		const prefix string = ",\"offeredAmount\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.OfferedAmount))
+	}
+	{
+		const prefix string = ",\"wantedNft\":"
+		out.RawString(prefix)
+		out.String(string(in.WantedNft))
+	}
+	{
+		const prefix string = ",\"wantedTokenId\":"
+		out.RawString(prefix)
+		out.String(string(in.WantedTokenId))
+	}
+	{
+		const prefix string = ",\"wantedAmount\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.WantedAmount))
+	}
+	{
+		const prefix string = ",\"topUp\":"
+		out.RawString(prefix)
+		out.String(string(in.TopUp))
+	}
+	{
+		const prefix string = ",\"topUpToken\":"
+		out.RawString(prefix)
+		out.String(string(in.TopUpToken))
+	}
+	{
+		const prefix string = ",\"active\":"
+		out.RawString(prefix)
+		out.Bool(bool(in.Active))
+	}
+	{
+		const prefix string = ",\"expirationBlock\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.ExpirationBlock))
+	}
+	out.RawByte('}')
+}
+
+func (v SwapResponse) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonD1EncodeSwapResponse(w, v)
+}
+
+// SwapProposedEvent encode
+func tinyjsonD1EncodeSwapProposedEvent(out *jwriter.Writer, in SwapProposedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"swapId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.SwapId))
+		}
+		{
+			const p2 string = ",\"proposer\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Proposer))
+		}
+		{
+			const p2 string = ",\"offeredNft\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.OfferedNft))
+		}
+		{
+			const p2 string = ",\"wantedNft\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.WantedNft))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v SwapProposedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonD1EncodeSwapProposedEvent(w, v)
+}
+
+// SwapAcceptedEvent encode
+func tinyjsonD1EncodeSwapAcceptedEvent(out *jwriter.Writer, in SwapAcceptedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"swapId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.SwapId))
+		}
+		{
+			const p2 string = ",\"proposer\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Proposer))
+		}
+		{
+			const p2 string = ",\"acceptor\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Acceptor))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v SwapAcceptedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonD1EncodeSwapAcceptedEvent(w, v)
+}
+
+// SwapCancelledEvent encode
+func tinyjsonD1EncodeSwapCancelledEvent(out *jwriter.Writer, in SwapCancelledEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"swapId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.SwapId))
+		}
+		{
+			const p2 string = ",\"by\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.By))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v SwapCancelledEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonD1EncodeSwapCancelledEvent(w, v)
+}

@@ -373,3 +373,47 @@ func emitBundleDelisted(bundleId uint64, seller string) {
 	event.MarshalTinyJSON(&w)
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
+
+// ===================================
+// D1: NFT-for-NFT Swap Events
+// ===================================
+
+func emitSwapProposed(swapId uint64, proposer, offeredNft, wantedNft string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := SwapProposedEvent{
+		Type: "swapProposed",
+		Attributes: SwapProposedAttributes{
+			SwapId: swapId, Proposer: proposer, OfferedNft: offeredNft, WantedNft: wantedNft,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitSwapAccepted(swapId uint64, proposer, acceptor string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := SwapAcceptedEvent{
+		Type: "swapAccepted",
+		Attributes: SwapAcceptedAttributes{
+			SwapId: swapId, Proposer: proposer, Acceptor: acceptor,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitSwapCancelled(swapId uint64, by string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := SwapCancelledEvent{
+		Type:       "swapCancelled",
+		Attributes: SwapCancelledAttributes{SwapId: swapId, By: by},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}

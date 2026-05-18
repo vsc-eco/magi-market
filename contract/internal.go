@@ -483,6 +483,45 @@ func loadBundleRoyaltySplitSnapshot(id uint64, fallbackRecip string, fallbackBps
 }
 
 // ===================================
+// Swap State Helpers (D1)
+// ===================================
+
+func swapKey(id uint64, field string) string {
+	return "sw|" + strconv.FormatUint(id, 10) + "|" + field
+}
+
+func setSwapField(id uint64, field, value string) {
+	sdk.StateSetObject(swapKey(id, field), value)
+}
+
+func getSwapField(id uint64, field string) string {
+	return getStringState(swapKey(id, field))
+}
+
+func getSwapUint64(id uint64, field string) uint64 {
+	return getUint64State(swapKey(id, field))
+}
+
+func setSwapUint64(id uint64, field string, val uint64) {
+	setUint64State(swapKey(id, field), val)
+}
+
+func isSwapActive(id uint64) bool {
+	return getSwapField(id, "act") == "1"
+}
+
+func getNextSwapId() uint64 {
+	return getUint64State("nxt_sw")
+}
+
+func setNextSwapId(id uint64) {
+	setUint64State("nxt_sw", id)
+}
+
+func setSwapMoney(id uint64, field string, v *big.Int) { setMoneyState(swapKey(id, field), v) }
+func getSwapMoney(id uint64, field string) *big.Int    { return getMoneyState(swapKey(id, field)) }
+
+// ===================================
 // Min Offer Helpers
 // ===================================
 
