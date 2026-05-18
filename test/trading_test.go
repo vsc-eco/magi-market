@@ -511,3 +511,73 @@ func TestFloorSweepRejectsForeignCollection(t *testing.T) {
 		assert.True(t, l.Active, "listing %d should still be active after failed sweep", id)
 	}
 }
+
+// ===================================
+// C3: Bundle Royalty Lock Test
+// ===================================
+
+// TestBundleRoyaltyLockedAtListing verifies that the royalty bps locked at
+// listBundle time is used for payout, even if the collection owner raises the
+// royalty after listing and before purchase.  Mirrors TestRoyaltyLockedAtListingCreation
+// for the bundle path.
+func TestBundleRoyaltyLockedAtListing(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:buyer"
+	creator := "hive:creator"
+
+	// Collection starts with NO royalty-split snapshot and zero royalty.
+	// Confirm baseline: no royalty set yet.
+
+	MintNft(t, ct, seller, "701", 1, 10)
+	MintNft(t, ct, seller, "702", 1, 10)
+	ApproveNftForMarket(t, ct, seller)
+	// Buyer funded with exact bundle price.
+	MintAndApproveToken(t, ct, buyer, 10000)
+
+	// List bundle BEFORE any royalty is set (royalty = 0 bps at listing time).
+	items := bundleItemsJSON([][2]string{{"701", "1"}, {"702", "1"}})
+	listPayload := fmt.Sprintf(
+		`{"nftContract":"%s","items":%s,"paymentToken":"%s","price":"10000","expirationBlock":0}`,
+		NftContractID, items, TokenID)
+	listResult, _, _ := CallMarket(t, ct, "listBundle", []byte(listPayload), nil, seller, "", true, gas, "")
+	bundleId := ParseCreated(listResult).Id
+
+	// NOW raise collection royalty to 20% (2000 bps) after the bundle is already listed.
+	royaltyPayload := fmt.Sprintf(`{"nftContract":"%s","royaltyBps":2000,"royaltyRecipient":"%s"}`, NftContractID, creator)
+	CallMarket(t, ct, "setRoyalty", []byte(royaltyPayload), nil, ownerAddress, "", true, gas, "")
+
+	// Record balances before buy.
+	sellerBefore := QueryTokenBalance(t, ct, seller)
+	feeRecipBefore := QueryTokenBalance(t, ct, feeRecipientAddress)
+
+	// Buyer purchases the bundle.
+	buyPayload := fmt.Sprintf(`{"bundleId":%d}`, bundleId)
+	CallMarket(t, ct, "buyBundle", []byte(buyPayload), nil, buyer, "", true, gas, "")
+
+	// Expected payouts based on listing-time royalty (0 bps):
+	//   price = 10000
+	//   fee   = 250 (250 bps locked fb)
+	//   royalty = 0 (0 bps locked rb — royalty was zero at listing time)
+	//   seller = 10000 - 250 - 0 = 9750
+	sellerAfter := QueryTokenBalance(t, ct, seller)
+	feeRecipAfter := QueryTokenBalance(t, ct, feeRecipientAddress)
+	creatorBalance := QueryTokenBalance(t, ct, creator)
+
+	assert.Equal(t, sellerBefore+9750, sellerAfter,
+		"seller should receive 9750 (listing-time royalty=0, not post-listing 20%)")
+	assert.Equal(t, feeRecipBefore+250, feeRecipAfter,
+		"fee recipient should receive 250 (2.5% fee)")
+	assert.Equal(t, uint64(0), creatorBalance,
+		"royalty recipient should receive 0 (royalty was 0 at listing time)")
+
+	// Buyer should hold both NFTs.
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, buyer, "701"))
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, buyer, "702"))
+
+	// Market should have zero residual.
+	marketBal := QueryTokenBalance(t, ct, MarketContractAddress)
+	assert.Equal(t, uint64(0), marketBal, "market should have zero residual")
+}

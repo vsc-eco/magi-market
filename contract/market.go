@@ -1253,6 +1253,7 @@ func ListBundle(payload *string) *string {
 		setBundleUint64(id, is+"_amt", item.Amount)
 	}
 	setBundleUint64(id, "fb", feeBps)
+	setBundleUint64(id, "rb", royaltyBps)
 	setBundleField(id, "rr", getRoyaltyRecipient(p.NftContract))
 	// Snapshot resolved royalty splits so in-flight bundles are unaffected by later split changes.
 	snapRecips, snapBps := resolveRoyaltySplits(p.NftContract)
@@ -1302,7 +1303,7 @@ func BuyBundle(payload *string) *string {
 	received := escrowIn(pt, caller, price)
 
 	lockedFeeBps := getBundleUint64(p.BundleId, "fb")
-	lockedRoyaltyBps := getRoyaltyBps(nc) // for fallback in snapshot loader
+	lockedRoyaltyBps := getBundleUint64(p.BundleId, "rb") // locked at list time, not live
 	royaltyRecipient := getBundleField(p.BundleId, "rr")
 
 	// Load royalty split snapshot; fall back to legacy single-entry for pre-B2 in-flight entries.
