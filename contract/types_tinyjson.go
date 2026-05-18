@@ -3042,6 +3042,10 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract37(in *jlexer.Lexer, out *ListPayl
 			out.ExpirationBlock = uint64(in.Uint64())
 		case "startBlock":
 			out.StartBlock = uint64(in.Uint64())
+		case "payoutMode":
+			out.PayoutMode = string(in.String())
+		case "payoutL1Address":
+			out.PayoutL1Address = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -3090,6 +3094,16 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract37(out *jwriter.Writer, in ListPay
 		const prefix string = ",\"startBlock\":"
 		out.RawString(prefix)
 		out.Uint64(uint64(in.StartBlock))
+	}
+	{
+		const prefix string = ",\"payoutMode\":"
+		out.RawString(prefix)
+		out.String(string(in.PayoutMode))
+	}
+	{
+		const prefix string = ",\"payoutL1Address\":"
+		out.RawString(prefix)
+		out.String(string(in.PayoutL1Address))
 	}
 	out.RawByte('}')
 }

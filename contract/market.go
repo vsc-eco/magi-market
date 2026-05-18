@@ -95,6 +95,20 @@ func doList(caller string, p *ListPayload) uint64 {
 		sdk.Abort("Insufficient NFT balance to list")
 	}
 
+	// F1: validate payoutMode / payoutL1Address
+	if p.PayoutMode == "unmap" {
+		if p.PayoutL1Address == "" {
+			sdk.Abort("payoutL1Address required for unmap payout")
+		}
+		for i := 0; i < len(p.PayoutL1Address); i++ {
+			c := p.PayoutL1Address[i]
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == ':' || c == '-') {
+				sdk.Abort("payoutL1Address contains invalid characters")
+			}
+		}
+	}
+
 	id := getNextListingId()
 	setListingField(id, "s", caller)
 	setListingField(id, "nc", p.NftContract)
@@ -108,6 +122,8 @@ func doList(caller string, p *ListPayload) uint64 {
 	setListingUint64(id, "rb", currentRoyaltyBps)
 	setListingField(id, "rr", getRoyaltyRecipient(p.NftContract))
 	setListingUint64(id, "sb", p.StartBlock)
+	setListingField(id, "pm", p.PayoutMode)
+	setListingField(id, "pl1", p.PayoutL1Address)
 	// Snapshot resolved royalty splits so in-flight trades are unaffected by later split changes.
 	snapRecips, snapBps := resolveRoyaltySplits(p.NftContract)
 	snapshotRoyaltySplitsForListing(id, snapRecips, snapBps)
@@ -223,8 +239,17 @@ func doBuy(caller string, p *BuyPayload) {
 		tokenTransferBig(paymentToken, getFeeRecipient(), fee)
 	}
 	distributeRoyaltySplitsResolved(paymentToken, received, snapRecips, snapBps)
-	if !mIsZero(sellerPayment) {
-		tokenTransferBig(paymentToken, seller, sellerPayment)
+	// F1: if payoutMode=="unmap", send seller's net to L1 via utxo unmap;
+	// otherwise use the legacy mapped-token transfer to the seller's account.
+	pm := getListingField(p.ListingId, "pm")
+	if pm == "unmap" {
+		if !mIsZero(sellerPayment) {
+			unmapTo(paymentToken, getListingField(p.ListingId, "pl1"), sellerPayment)
+		}
+	} else {
+		if !mIsZero(sellerPayment) {
+			tokenTransferBig(paymentToken, seller, sellerPayment)
+		}
 	}
 
 	newRemaining := safeSub(remaining, p.Amount)

@@ -14,13 +14,15 @@ type InitPayload struct {
 }
 
 type ListPayload struct {
-	NftContract     string `json:"nftContract"`
-	TokenId         string `json:"tokenId"`
-	Amount          uint64 `json:"amount"`
-	PaymentToken    string `json:"paymentToken"`
-	PricePerUnit    string `json:"pricePerUnit"`
-	ExpirationBlock uint64 `json:"expirationBlock"`
-	StartBlock      uint64 `json:"startBlock"`
+	NftContract      string `json:"nftContract"`
+	TokenId          string `json:"tokenId"`
+	Amount           uint64 `json:"amount"`
+	PaymentToken     string `json:"paymentToken"`
+	PricePerUnit     string `json:"pricePerUnit"`
+	ExpirationBlock  uint64 `json:"expirationBlock"`
+	StartBlock       uint64 `json:"startBlock"`
+	PayoutMode       string `json:"payoutMode"`       // "" | "default" | "unmap" (F1 opt-in)
+	PayoutL1Address  string `json:"payoutL1Address"`  // required when PayoutMode=="unmap"
 }
 
 type DelistPayload struct {

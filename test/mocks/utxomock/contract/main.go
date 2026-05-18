@@ -225,3 +225,68 @@ func Tbal(payload *string) *string {
 	r := `{"balance":"` + strconv.FormatInt(getAccBal(account), 10) + `"}`
 	return &r
 }
+
+// ---------------------------------------------------------------------------
+// F1: unmap entrypoint — mirrors utxo-mapping `unmap` stable ABI.
+//
+// Payload: {"to":"<l1address>","amount":"<decimal>"}
+// Draws from CALLER's balance (the `from` field is ignored — caller is the
+// source, verified F0). Debits caller by `amount`; records the payout in
+// state key "unmapped|<to>" so tests can assert via getUnmapped.
+// Returns bare "0" on success (matching real utxo-mapping handler return).
+// ---------------------------------------------------------------------------
+
+func unmappedKey(addr string) string { return "unmapped|" + addr }
+
+func getUnmappedAmt(addr string) int64 {
+	s := sdk.StateGetObject(unmappedKey(addr))
+	if s == nil || *s == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(*s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func addUnmappedAmt(addr string, amount int64) {
+	cur := getUnmappedAmt(addr)
+	sdk.StateSetObject(unmappedKey(addr), strconv.FormatInt(cur+amount, 10))
+}
+
+//go:wasmexport unmap
+func Unmap(payload *string) *string {
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+	to := jsonStringField(*payload, "to")
+	amountStr := jsonStringField(*payload, "amount")
+	if to == "" || amountStr == "" {
+		sdk.Abort("to and amount required")
+	}
+	amount := parseAmount(amountStr)
+	// Debit the CALLER's balance (caller is always the source in real unmap).
+	c := caller()
+	debit(c, amount)
+	// Record the unmap payout for test assertions.
+	addUnmappedAmt(to, amount)
+	return zero()
+}
+
+// getUnmapped is a TEST-ONLY query that returns the total amount unmapped to
+// a given L1 address. Returns {"balance":"<dec>"} (reusing ParseBalance helper).
+// NOT named balanceOf so magi-market never calls it.
+//
+//go:wasmexport getUnmapped
+func GetUnmapped(payload *string) *string {
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+	addr := jsonStringField(*payload, "addr")
+	if addr == "" {
+		sdk.Abort("addr required")
+	}
+	r := `{"balance":"` + strconv.FormatInt(getUnmappedAmt(addr), 10) + `"}`
+	return &r
+}
