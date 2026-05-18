@@ -1,24 +1,38 @@
 // Minimal NFT mock for the magi-market mint-spot test harness.
 //
-// Models the magi_nft-contract post-feature ABI documented in:
-//   magi_nft-contract/docs/superpowers/specs/
-//     2026-05-18-editioned-nft-define-delegated-mint-design.md
+// Models the magi_nft-contract post-feature ABI as actually IMPLEMENTED on
+// upstream branch feat/editioned-define-delegated-mint (commit cebd5a0),
+// verified field-by-field 2026-05-18:
+//   - maxSupply / balanceOf responses are UNQUOTED JSON numbers (out.Uint64).
+//   - mint auth = owner OR setApprovalForAll operator (uncapped) OR a
+//     per-token ERC-6909 approve allowance (capped, decremented per mint).
+//   - the magi-market-coupled raw-state keys `owner` and `op|<o>|<op>`="1"
+//     mirror the real Init / operatorKey exactly.
 //
 // Supported entrypoints:
-//   init            {owner}             → {"success":true}
-//   define          {id, maxSupply}     → {"success":true}
-//   setApprovalForAll {operator,approved} → {"success":true}
-//   mint            {to, id, amount}    → {"success":true}
-//   balanceOf       {account, id}       → {"balance":"<dec>"}
-//   maxSupply       {id}                → {"maxSupply":"<dec>"}
-//   getOwner        (ignored)           → {"owner":"<addr>"}
+//   init            {owner}                  → {"success":true}
+//   define          {id, maxSupply}          → {"success":true}  (test setup)
+//   setApprovalForAll {operator,approved}    → {"success":true}
+//   approve         {spender, id, amount}    → {"success":true}  (ERC-6909)
+//   allowance       {owner, spender, id}     → {"amount":<uint>}
+//   mint            {to, id, amount}         → {"success":true}
+//   balanceOf       {account, id}            → {"balance":<uint>}
+//   maxSupply       {id}                     → {"maxSupply":<uint>}
+//   getOwner        (ignored)                → {"owner":"<addr>"}
 //
 // State keys:
-//   owner               stored owner address
-//   b|<acct>|<id>       balance (decimal string int)
-//   ms|<id>             maxSupply of edition (decimal string uint64)
-//   mt|<id>             minted count of edition (decimal string uint64)
-//   op|<owner>|<oper>   "1" if operator approved
+//   owner                       stored owner address          (real: "owner")
+//   op|<owner>|<oper>           "1" if operator approved       (real: operatorKey)
+//   b|<acct>|<id>               balance (decimal string)       (mock-internal)
+//   ms|<id>                     maxSupply (decimal string)     (mock-internal)
+//   mt|<id>                     minted count (decimal string)  (mock-internal)
+//   al|<owner>|<spender>|<id>   per-token allowance (decimal)  (mock-internal)
+//
+// `owner` and `op|...` use the real key/value layout because magi-market
+// raw-reads them (nftGetOwner / nftIsApprovedForAll). The balance/supply
+// stores are mock-internal: magi-market never raw-reads them — it goes
+// through the maxSupply/balanceOf ABI, whose response NUMBER format is what
+// this mock faithfully reproduces.
 //
 // JSON is hand-rolled (substring scan) — NO tinyjson.
 
@@ -165,10 +179,13 @@ func setUint64State(key string, val uint64) {
 	sdk.StateSetObject(key, strconv.FormatUint(val, 10))
 }
 
-func balKey(acct, id string) string   { return "b|" + acct + "|" + id }
-func maxSupplyKey(id string) string   { return "ms|" + id }
-func mintedKey(id string) string      { return "mt|" + id }
+func balKey(acct, id string) string       { return "b|" + acct + "|" + id }
+func maxSupplyKey(id string) string       { return "ms|" + id }
+func mintedKey(id string) string          { return "mt|" + id }
 func operatorKey(owner, op string) string { return "op|" + owner + "|" + op }
+func allowanceKey(owner, spender, id string) string {
+	return "al|" + owner + "|" + spender + "|" + id
+}
 
 func getBalance(acct, id string) uint64 {
 	return getUint64State(balKey(acct, id))
@@ -269,9 +286,72 @@ func SetApprovalForAll(payload *string) *string {
 	return success()
 }
 
+// approve sets a per-token ERC-6909 allowance for a spender.
+// Payload: {"spender":"<addr>","id":"<id>","amount":<uint>}
+// Caller is the granting account (the edition owner, in the mint-spot flow).
+// Mirrors the real Approve: setAllowance(caller, spender, id, amount).
+//
+//go:wasmexport approve
+func Approve(payload *string) *string {
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+	p := *payload
+	caller := getCaller()
+	spender := jsonStringField(p, "spender")
+	if spender == "" {
+		sdk.Abort("Spender required")
+	}
+	id := jsonStringField(p, "id")
+	if id == "" {
+		sdk.Abort("Token ID required")
+	}
+	if caller == spender {
+		sdk.Abort("Cannot approve self")
+	}
+	amtStr := jsonNumberField(p, "amount")
+	if amtStr == "" {
+		sdk.Abort("amount required")
+	}
+	amount, err := strconv.ParseUint(amtStr, 10, 64)
+	if err != nil {
+		sdk.Abort("invalid amount")
+	}
+	key := allowanceKey(caller, spender, id)
+	if amount == 0 {
+		sdk.StateDeleteObject(key)
+	} else {
+		setUint64State(key, amount)
+	}
+	return success()
+}
+
+// allowance returns the per-token allowance for spender on (owner,id).
+// Payload: {"owner":"<addr>","spender":"<addr>","id":"<id>"}
+// Returns: {"amount":<uint>}  (real AllowanceResponse marshals out.Uint64)
+//
+//go:wasmexport allowance
+func Allowance(payload *string) *string {
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+	p := *payload
+	owner := jsonStringField(p, "owner")
+	spender := jsonStringField(p, "spender")
+	id := jsonStringField(p, "id")
+	if owner == "" || spender == "" || id == "" {
+		sdk.Abort("owner, spender and id required")
+	}
+	amt := getUint64State(allowanceKey(owner, spender, id))
+	r := `{"amount":` + strconv.FormatUint(amt, 10) + `}`
+	return &r
+}
+
 // mint mints `amount` tokens of edition `id` to `to`.
 // Payload: {"to":"<addr>","id":"<id>","amount":<uint>}
-// Caller must be owner OR an approved operator of the owner.
+// Auth mirrors the real Mint (amount>0 path): caller must be the owner, an
+// owner-approved operator (uncapped), OR hold a per-token approve allowance
+// >= amount, which is decremented per mint (ERC-6909).
 //
 //go:wasmexport mint
 func Mint(payload *string) *string {
@@ -281,14 +361,6 @@ func Mint(payload *string) *string {
 	p := *payload
 	caller := getCaller()
 	owner := getOwnerAddr()
-
-	// Auth: caller must be owner or approved operator
-	opKey := operatorKey(owner, caller)
-	opVal := sdk.StateGetObject(opKey)
-	isApproved := opVal != nil && *opVal == "1"
-	if caller != owner && !isApproved {
-		sdk.Abort("Must be owner or approved operator to mint")
-	}
 
 	to := jsonStringField(p, "to")
 	if to == "" {
@@ -305,6 +377,19 @@ func Mint(payload *string) *string {
 	amount, err := strconv.ParseUint(amountStr, 10, 64)
 	if err != nil || amount == 0 {
 		sdk.Abort("amount must be > 0")
+	}
+
+	// Auth: owner OR approved operator (uncapped) OR per-token allowance
+	// (capped, decremented per mint) — mirrors real Mint exactly.
+	opVal := sdk.StateGetObject(operatorKey(owner, caller))
+	isOperator := opVal != nil && *opVal == "1"
+	if caller != owner && !isOperator {
+		allowKey := allowanceKey(owner, caller, id)
+		allowed := getUint64State(allowKey)
+		if allowed < amount {
+			sdk.Abort("Must be owner or approved operator to mint")
+		}
+		setUint64State(allowKey, allowed-amount)
 	}
 
 	ms := getUint64State(maxSupplyKey(id))
@@ -337,7 +422,8 @@ func BalanceOf(payload *string) *string {
 		sdk.Abort("account and id required")
 	}
 	bal := getBalance(account, id)
-	r := `{"balance":"` + strconv.FormatUint(bal, 10) + `"}`
+	// Real BalanceResponse marshals out.Uint64 → unquoted JSON number.
+	r := `{"balance":` + strconv.FormatUint(bal, 10) + `}`
 	return &r
 }
 
@@ -356,7 +442,8 @@ func MaxSupply(payload *string) *string {
 		sdk.Abort("id required")
 	}
 	ms := getUint64State(maxSupplyKey(id))
-	r := `{"maxSupply":"` + strconv.FormatUint(ms, 10) + `"}`
+	// Real MaxSupplyResponse marshals out.Uint64 → unquoted JSON number.
+	r := `{"maxSupply":` + strconv.FormatUint(ms, 10) + `}`
 	return &r
 }
 

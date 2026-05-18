@@ -914,7 +914,10 @@ func setNextMintSpotId(id uint64) {
 // against the [a-zA-Z0-9:-] allowlist before passing it here (it is
 // concatenated into the call payload). listMintSpots enforces this.
 //
-// The nft contract returns {"maxSupply":"<dec>"}. Returns 0 if nil or unparseable.
+// The real magi_nft contract returns {"maxSupply":<uint64>} as an UNQUOTED
+// JSON number (MaxSupplyResponse marshals via out.Uint64; verified against
+// upstream feat/editioned-define-delegated-mint). A quoted "<dec>" form is
+// also tolerated for robustness. Returns 0 if nil/absent/unparseable.
 // This is a stable-ABI call (not internal-state read) per spec Section 3.
 func nftMaxSupplyOf(nftContract, tokenId string) uint64 {
 	payload := `{"id":"` + tokenId + `"}`
@@ -922,9 +925,10 @@ func nftMaxSupplyOf(nftContract, tokenId string) uint64 {
 	if result == nil || *result == "" {
 		return 0
 	}
-	// Parse {"maxSupply":"<dec>"} — find the value after "maxSupply":"
+	// Find the value after `"maxSupply":`, skip whitespace and an optional
+	// surrounding quote, then read the decimal digit run.
 	s := *result
-	key := `"maxSupply":"`
+	key := `"maxSupply":`
 	idx := -1
 	for i := 0; i+len(key) <= len(s); i++ {
 		if s[i:i+len(key)] == key {
@@ -935,8 +939,14 @@ func nftMaxSupplyOf(nftContract, tokenId string) uint64 {
 	if idx < 0 {
 		return 0
 	}
+	for idx < len(s) && (s[idx] == ' ' || s[idx] == '\t' || s[idx] == '\n') {
+		idx++
+	}
+	if idx < len(s) && s[idx] == '"' {
+		idx++ // quoted-number form
+	}
 	end := idx
-	for end < len(s) && s[end] != '"' {
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
 		end++
 	}
 	if end <= idx {

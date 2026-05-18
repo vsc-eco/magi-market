@@ -60,6 +60,34 @@ func ApproveMintNftMockForMarket(t *testing.T, ct *test_utils.ContractTest) {
 		ownerAddress, true, "")
 }
 
+// ApproveMintNftTokenAllowance grants spender a per-token ERC-6909 allowance
+// on (ownerAddress, id) — the narrower "approve(spender, id, amount=N)" mode.
+func ApproveMintNftTokenAllowance(t *testing.T, ct *test_utils.ContractTest, spender, id string, amount uint64) {
+	CallMintNftMock(t, ct, "approve",
+		[]byte(fmt.Sprintf(`{"spender":"%s","id":"%s","amount":%d}`, spender, id, amount)),
+		ownerAddress, true, "")
+}
+
+// QueryMintNftAllowance reads the per-token allowance for spender on (owner,id).
+func QueryMintNftAllowance(t *testing.T, ct *test_utils.ContractTest, owner, spender, id string) uint64 {
+	cr := CallMintNftMock(t, ct, "allowance",
+		[]byte(fmt.Sprintf(`{"owner":"%s","spender":"%s","id":"%s"}`, owner, spender, id)),
+		"hive:anyone", true, "")
+	var resp struct {
+		Amount uint64 `json:"amount"`
+	}
+	json.Unmarshal([]byte(cr.Ret), &resp)
+	return resp.Amount
+}
+
+// MintNftMockMintAs calls the mintnftmock `mint` entrypoint directly as
+// authUser (the delegated-mint call magi-market's nftDelegatedMint drives).
+func MintNftMockMintAs(t *testing.T, ct *test_utils.ContractTest, authUser, to, id string, amount uint64, expectOk bool, expectedOutput string) {
+	CallMintNftMock(t, ct, "mint",
+		[]byte(fmt.Sprintf(`{"to":"%s","id":"%s","amount":%d}`, to, id, amount)),
+		authUser, expectOk, expectedOutput)
+}
+
 // QueryMintNftBalance queries balanceOf on the mintnftmock.
 func QueryMintNftBalance(t *testing.T, ct *test_utils.ContractTest, account, id string) uint64 {
 	cr := CallMintNftMock(t, ct, "balanceOf",
@@ -610,4 +638,103 @@ func TestMintSpotListerCannotBuyOwn(t *testing.T) {
 	// Assert no mint occurred — NFT balance must be unchanged.
 	nftAfter := QueryMintNftBalance(t, ct, ownerAddress, tokenId)
 	assert.Equal(t, nftBefore, nftAfter, "lister NFT balance must be unchanged after self-buy attempt")
+}
+
+// ---------------------------------------------------------------------------
+// TestMintSpotDelegatedMintViaOperatorApproval
+//
+// Authorization mode 1: the edition owner runs setApprovalForAll(market, true).
+// This is the mode magi-market's listMintSpots requires. The market then
+// delegated-mints to buyers, uncapped at the auth layer (bounded only by the
+// nft maxSupply), and never itself holds the NFT.
+// ---------------------------------------------------------------------------
+
+func TestMintSpotDelegatedMintViaOperatorApproval(t *testing.T) {
+	ct := setupMintSpotBase(t, 0)
+
+	buyer := "hive:buyer"
+	paymentToken := TokenID
+	tokenId := "1"
+
+	// maxSupply 3; owner authorizes the market via setApprovalForAll (uncapped).
+	// Fund the buyer for 4 buys (4×1000) so the 4th reaches the nft mint and
+	// aborts on maxSupply — not earlier on token escrow.
+	DefineMintEdition(t, ct, tokenId, 3)
+	ApproveMintNftMockForMarket(t, ct)
+	MintAndApproveToken(t, ct, buyer, 4000)
+
+	listMintSpots(t, ct, MintNftMockID, tokenId, paymentToken, "1000", 0, 0, 0, ownerAddress, true, "")
+
+	// Operator approval is uncapped: market mints 2 then 1 (= maxSupply 3).
+	buyMintSpot(t, ct, 0, 2, buyer, true, "")
+	assert.Equal(t, uint64(2), QueryMintNftBalance(t, ct, buyer, tokenId), "buyer has 2 via operator-delegated mint")
+	buyMintSpot(t, ct, 0, 1, buyer, true, "")
+	assert.Equal(t, uint64(3), QueryMintNftBalance(t, ct, buyer, tokenId), "buyer has 3 (== maxSupply)")
+
+	// Market never custodies the minted NFT (mint is buyer-direct).
+	assert.Equal(t, uint64(0), QueryMintNftBalance(t, ct, MarketContractAddress, tokenId), "market holds no NFT")
+
+	// Operator approval does not bypass the nft maxSupply cap.
+	buyMintSpot(t, ct, 0, 1, buyer, false, "Would exceed max supply")
+	assert.Equal(t, uint64(3), QueryMintNftBalance(t, ct, buyer, tokenId), "buyer NFT balance unchanged after capped revert")
+}
+
+// ---------------------------------------------------------------------------
+// TestMintSpotPerTokenAllowanceAuthorizesNftMintButMarketRequiresOperator
+//
+// Authorization mode 2: the edition owner runs approve(spender=market, id,
+// amount=N) — the narrower ERC-6909 per-token allowance.
+//
+// Finding surfaced by this test: the real magi_nft `mint` accepts a per-token
+// allowance as delegated-mint authorization (capped at N, decremented per
+// mint), BUT magi-market's listMintSpots gates listing on
+// nftIsApprovedForAll (operator approval) only. So a per-token allowance
+// alone is NOT sufficient to create a mint-spot listing — the owner must also
+// setApprovalForAll. This test asserts both halves: the listing gate rejects
+// allowance-only, and the underlying allowance-capped delegated mint behaves
+// correctly at the nft layer (capped at N, decremented per mint).
+//
+// The market never executes calls on its own — every market action is a
+// user-signed tx, and that original sender pays the RC; a market-initiated
+// mint is always a NESTED call (msg.caller == market) riding on the user's
+// tx. So a per-token allowance granted to the market is RC-viable in
+// production (the buyer's tx funds it); the only thing stopping the
+// allowance-to-market flow is magi-market's own listMintSpots operator gate
+// (Half 1). Half 2 can't reproduce a nested market mint at top level (the
+// market is never a top-level signer), so it uses a regular signing account
+// ("hive:delegate") as the approve() grantee to exercise the identical
+// ERC-6909 per-token-allowance mint mechanics in isolation.
+// ---------------------------------------------------------------------------
+
+func TestMintSpotPerTokenAllowanceAuthorizesNftMintButMarketRequiresOperator(t *testing.T) {
+	ct := setupMintSpotBase(t, 0)
+
+	buyer := "hive:buyer"
+	delegate := "hive:delegate"
+	paymentToken := TokenID
+	tokenId := "1"
+
+	DefineMintEdition(t, ct, tokenId, 10)
+
+	// Half 1: owner grants the MARKET a per-token allowance of 2, with NO
+	// setApprovalForAll. listMintSpots must still reject it — the listing gate
+	// requires operator approval, not a per-token allowance.
+	ApproveMintNftTokenAllowance(t, ct, MarketContractAddress, tokenId, 2)
+	assert.Equal(t, uint64(2), QueryMintNftAllowance(t, ct, ownerAddress, MarketContractAddress, tokenId), "market allowance recorded")
+	listMintSpots(t, ct, MintNftMockID, tokenId, paymentToken, "1000", 0, 0, 0, ownerAddress, false,
+		"Marketplace not approved as operator for this NFT collection")
+
+	// Half 2: owner runs approve(spender=delegate, id, amount=2). The delegate
+	// can then mint up to 2, decremented per mint; the 3rd is unauthorized.
+	ApproveMintNftTokenAllowance(t, ct, delegate, tokenId, 2)
+	assert.Equal(t, uint64(2), QueryMintNftAllowance(t, ct, ownerAddress, delegate, tokenId), "delegate allowance recorded")
+
+	MintNftMockMintAs(t, ct, delegate, buyer, tokenId, 2, true, "")
+	assert.Equal(t, uint64(2), QueryMintNftBalance(t, ct, buyer, tokenId), "allowance-delegated mint of 2 succeeded")
+	assert.Equal(t, uint64(0), QueryMintNftAllowance(t, ct, ownerAddress, delegate, tokenId), "allowance decremented to 0")
+
+	// Allowance now exhausted: a further delegated mint is unauthorized.
+	MintNftMockMintAs(t, ct, delegate, buyer, tokenId, 1, false,
+		"Must be owner or approved operator to mint")
+	assert.Equal(t, uint64(2), QueryMintNftBalance(t, ct, buyer, tokenId), "no extra NFT minted after allowance exhausted")
 }
