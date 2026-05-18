@@ -194,11 +194,70 @@ Extend the existing `test/` suite (mock nft/token contracts):
 - Any changes to `magi_nft-contract`, `magi_token-contract`, or
   `utxo-mapping` themselves.
 
-## Open verification items (carried into the plan, not redesign)
+## UTXO mapping wire-compat verification (2026-05-18, read-only)
 
-1. UTXO mapping `transfer`/`transferFrom`/`balanceOf` accept `contract:<id>`
-   and caller address form; document canonical form.
-2. UTXO internal-ledger transfer default (`deduct_fee=false`) behavior
-   confirmed (balance-delta protects regardless).
-3. tinygo `wasm-unknown` build stays within size/gas budget after adding
-   `math/big` (magi_token-contract proves feasibility).
+Verified against `utxo-mapping/btc-mapping-contract` at its committed state
+(no external-repo modification). Findings recorded honestly, including a
+surfaced blocker that is documented here as a RISK rather than worked around.
+
+1. **UTXO build result.** `tinygo build -gc=custom -scheduler=none
+   -panic=trap -no-debug -target=wasm-unknown ./contract` FAILS under the
+   pinned `GOTOOLCHAIN=go1.25.3` because the repo's `go.mod` declares
+   `go 1.25.6` (`go: go.mod requires go >= 1.25.6 (running go 1.25.3)`).
+   The same build SUCCEEDS with `GOTOOLCHAIN=go1.25.6` (auto-fetched,
+   no repo change): a 704 KB wasm is produced. Conclusion: the UTXO
+   contract builds; it just requires go ≥ 1.25.6, a newer floor than
+   magi-market's. Not a code-compat issue, but a toolchain-version note
+   for whoever wires the integration build.
+
+2. **Payload field-name parity.** `transfer` / `transferFrom` both
+   unmarshal `mapping.TransferParams` = `{"amount":"<dec-string>",
+   "to":"<addr>","from":"<addr>"(omitempty),"deduct_fee":bool(omitempty),
+   "max_fee":int(omitempty)}`. magi-market emits exactly:
+   `tokenTransferBig` → `{"to":"<addr>","amount":"<dec>"}`,
+   `tokenTransferFromBig` → `{"from":"<addr>","to":"<addr>","amount":"<dec>"}`.
+   Field names + the quoted-decimal-string `amount` type MATCH (UTXO's
+   extra fields are all `omitempty`, so the market's narrower payload
+   parses cleanly; `transfer` additionally force-clears `from`).
+   **MISMATCH / BLOCKER:** the UTXO contract exposes **no `balanceOf`
+   entrypoint** (full wasmexport list: seedBlocks, initPruning,
+   setMaxUnmapPerBlock, prune, addBlocks, replaceBlock, replaceBlocks,
+   map, unmap, unmapFrom, transfer, transferFrom, approve,
+   increaseAllowance, decreaseAllowance, confirmSpend, pause, unpause,
+   migrate, getInfo, registerPublicKey, createKey, renewKey,
+   registerRouter — no `balanceOf`). magi-market's `escrowIn` /
+   `tokenBalanceOf` REQUIRE a `balanceOf` returning
+   `{"balance":"<dec>"}`. Without it the balance-delta escrow
+   accounting (the entire fee-on-transfer / deduct_fee safety
+   mechanism) cannot run against the UTXO token. Separately, UTXO
+   `transfer`/`transferFrom` return the bare string `"0"` (not
+   `{"success":true}`); magi-market only null-checks the result so
+   that is tolerated — the `balanceOf` gap is the hard blocker. This
+   is recorded as a RISK; no adapter added and the utxo repo is left
+   unmodified per the no-external-repo-mods constraint.
+
+3. **Address-form finding + canonical form.** UTXO `HandleTransfer`
+   uses `from`/`to`/account opaquely as ledger keys
+   (`constants.BalancePrefix + acct`) — no `did:vsc:`-only ledger
+   validation. BUT the recipient is gated by
+   `sdk.VerifyAddress(instructions.To) != "unknown"`, backed by host
+   `dids.VerifyAddress`. That accepts `hive:<username>` only for a
+   3–16-char hive-pattern name, and `contract:<id>` only when the id is
+   `vsc1`-prefixed, exactly 38 chars, base58check with version `0x1a`.
+   Canonical required form: the marketplace escrow address must be the
+   real deployed `contract:vsc1…` (38-char base58check) — which it is
+   on a live chain — and users must be valid `hive:` names. Arbitrary
+   short ids (e.g. `contract:market` as used in the unit harness) would
+   be rejected as `"unknown"`. This is NOT a blocker for production
+   (real contract ids are canonical `vsc1…`); it is a constraint to
+   honor in integration tests (use canonical addresses, not stub ids).
+
+**Surfaced blocker (carried to report):** the UTXO mapping contract has
+no `balanceOf`, so magi-market's balance-delta escrow cannot operate
+against it as-is. Fixing this requires a change in the utxo-mapping repo
+(add a `balanceOf` entrypoint returning `{"balance":"<dec>"}`), which is
+out of scope here and must not be done as a magi-market-side adapter.
+
+(Prior item — tinygo `wasm-unknown` size/gas budget after adding
+`math/big` — is already proven: the fee-on-transfer mock and the live
+magi-market `main.wasm` both build and the full 249-test suite passes.)
