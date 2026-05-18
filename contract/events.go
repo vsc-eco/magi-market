@@ -321,3 +321,15 @@ func emitCollectionFeeCleared(nftContract string) {
 	event.MarshalTinyJSON(&w)
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
+
+func emitSwept(buyer string, count uint64, total string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := SweptEvent{
+		Type:       "swept",
+		Attributes: SweptAttributes{Buyer: buyer, Count: count, Total: total},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}

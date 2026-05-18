@@ -563,6 +563,28 @@ type RoyaltySplitsSetAttributes struct {
 }
 
 // ===================================
+// C2: Floor Sweep Types
+// ===================================
+
+type SweepPayload struct {
+	NftContract string   `json:"nftContract"`
+	ListingIds  []uint64 `json:"listingIds"`
+	MaxTotal    string   `json:"maxTotal"`
+}
+
+type SweptEvent struct {
+	Type       string           `json:"type"`
+	Attributes SweptAttributes  `json:"attributes"`
+	Tx         string           `json:"tx"`
+}
+
+type SweptAttributes struct {
+	Buyer string `json:"buyer"`
+	Count uint64 `json:"count"`
+	Total string `json:"total"`
+}
+
+// ===================================
 // B3: Per-Collection Fee Override Types
 // ===================================
 

@@ -1039,6 +1039,66 @@ func SetAntiSnipeBlocks(payload *string) *string {
 }
 
 // ===================================
+// C2: Floor Sweep
+// ===================================
+
+//go:wasmexport sweep
+func Sweep(payload *string) *string {
+	assertInit()
+	assertNotPaused()
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p SweepPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if p.NftContract == "" {
+		sdk.Abort("NFT contract required")
+	}
+	if len(p.ListingIds) == 0 {
+		sdk.Abort("At least one listing required")
+	}
+
+	maxTotal := parseMoney(p.MaxTotal)
+
+	// FIRST PASS: validate all listings and accumulate total cost.
+	total := mZero()
+	for _, id := range p.ListingIds {
+		if !isListingActive(id) {
+			sdk.Abort("Listing not active")
+		}
+		if isExpired(getListingUint64(id, "exp")) {
+			sdk.Abort("Listing has expired")
+		}
+		if getListingField(id, "nc") != p.NftContract {
+			sdk.Abort("Listing not in collection")
+		}
+		cost := mMulU64(getListingMoney(id, "p"), getListingUint64(id, "a"))
+		total = mAdd(total, cost)
+	}
+
+	if mCmp(total, maxTotal) > 0 {
+		sdk.Abort("Sweep exceeds maxTotal")
+	}
+
+	// SECOND PASS: execute each buy (reuses balance-delta/fee/royalty-splits/denylist/atomic-revert).
+	for _, id := range p.ListingIds {
+		doBuy(caller, &BuyPayload{ListingId: id, Amount: getListingUint64(id, "a")})
+	}
+
+	emitSwept(caller, uint64(len(p.ListingIds)), formatMoney(total))
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+// ===================================
 // Batch Functions
 // ===================================
 

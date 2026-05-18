@@ -6627,3 +6627,108 @@ func tinyjsonB3EncodeCollectionFeeClearedEvent(out *jwriter.Writer, in Collectio
 func (v CollectionFeeClearedEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonB3EncodeCollectionFeeClearedEvent(w, v)
 }
+
+// ---- hand-added (sub-project C2): floor sweep structs ----
+
+// SweepPayload decode (input: nftContract string, listingIds []uint64 array, maxTotal string)
+func tinyjsonC2DecodeSweepPayload(in *jlexer.Lexer, out *SweepPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "nftContract":
+			out.NftContract = string(in.String())
+		case "listingIds":
+			if in.IsNull() {
+				in.Skip()
+				out.ListingIds = nil
+			} else {
+				in.Delim('[')
+				if out.ListingIds == nil {
+					if !in.IsDelim(']') {
+						out.ListingIds = make([]uint64, 0, 4)
+					} else {
+						out.ListingIds = []uint64{}
+					}
+				} else {
+					out.ListingIds = (out.ListingIds)[:0]
+				}
+				for !in.IsDelim(']') {
+					var v1 uint64
+					v1 = uint64(in.Uint64())
+					out.ListingIds = append(out.ListingIds, v1)
+					in.WantComma()
+				}
+				in.Delim(']')
+			}
+		case "maxTotal":
+			out.MaxTotal = string(in.String())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *SweepPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonC2DecodeSweepPayload(l, v)
+}
+
+// SweptEvent encode (mirrors tinyjsonGovEncodeCollectionDenied + count uint64 + total string attributes)
+func tinyjsonC2EncodeSweptEvent(out *jwriter.Writer, in SweptEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"buyer\":"
+			out.RawString(p2[1:])
+			out.String(string(in.Attributes.Buyer))
+		}
+		{
+			const p2 string = ",\"count\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Count))
+		}
+		{
+			const p2 string = ",\"total\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Total))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v SweptEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC2EncodeSweptEvent(w, v)
+}
