@@ -246,6 +246,57 @@ func setRoyaltyRecipientState(nftContract, recipient string) {
 }
 
 // ===================================
+// Royalty Split Helpers (B1)
+// ===================================
+
+func rsplitKey(nftContract string, suffix string) string {
+	return "rsplit|" + nftContract + "|" + suffix
+}
+
+func setRoyaltySplits(nft string, recips []string, bpss []uint64) {
+	n := uint64(len(recips))
+	setUint64State(rsplitKey(nft, "n"), n)
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		setStringState(rsplitKey(nft, is+"|r"), recips[i])
+		setUint64State(rsplitKey(nft, is+"|b"), bpss[i])
+	}
+}
+
+func getRoyaltySplitCount(nft string) uint64 {
+	return getUint64State(rsplitKey(nft, "n"))
+}
+
+func getRoyaltySplit(nft string, i uint64) (string, uint64) {
+	is := strconv.FormatUint(i, 10)
+	recip := getStringState(rsplitKey(nft, is+"|r"))
+	bps := getUint64State(rsplitKey(nft, is+"|b"))
+	return recip, bps
+}
+
+// resolveRoyaltySplits returns the effective royalty splits for an NFT collection.
+// If multi-split state exists (rsplit|<nft>|n > 0) it returns those.
+// Otherwise falls back to the legacy single-entry (getRoyaltyRecipient/getRoyaltyBps).
+// Returns empty slices if no royalty is configured.
+func resolveRoyaltySplits(nft string) ([]string, []uint64) {
+	n := getRoyaltySplitCount(nft)
+	if n > 0 {
+		recips := make([]string, n)
+		bpss := make([]uint64, n)
+		for i := uint64(0); i < n; i++ {
+			recips[i], bpss[i] = getRoyaltySplit(nft, i)
+		}
+		return recips, bpss
+	}
+	// Legacy fallback: single-entry split
+	bps := getRoyaltyBps(nft)
+	if bps > 0 {
+		return []string{getRoyaltyRecipient(nft)}, []uint64{bps}
+	}
+	return []string{}, []uint64{}
+}
+
+// ===================================
 // Min Offer Helpers
 // ===================================
 

@@ -6303,3 +6303,190 @@ func tinyjsonGovEncodeCollectionAllowed(out *jwriter.Writer, in CollectionAllowe
 func (v CollectionAllowedEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonGovEncodeCollectionAllowed(w, v)
 }
+
+// ---- hand-added (sub-project B1): royalty splits structs ----
+
+// RoyaltySplit encode (used within array encoders)
+func tinyjsonB1EncodeRoyaltySplit(out *jwriter.Writer, in RoyaltySplit) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"recipient\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Recipient))
+	}
+	{
+		const prefix string = ",\"bps\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.Bps))
+	}
+	out.RawByte('}')
+}
+
+// RoyaltySplit decode (used within array decoders)
+func tinyjsonB1DecodeRoyaltySplit(in *jlexer.Lexer, out *RoyaltySplit) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "recipient":
+			out.Recipient = string(in.String())
+		case "bps":
+			out.Bps = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v RoyaltySplit) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonB1EncodeRoyaltySplit(w, v)
+}
+func (v *RoyaltySplit) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonB1DecodeRoyaltySplit(l, v)
+}
+
+// SetRoyaltySplitsPayload decode (input: nftContract + splits array)
+func tinyjsonB1DecodeSetRoyaltySplitsPayload(in *jlexer.Lexer, out *SetRoyaltySplitsPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "nftContract":
+			out.NftContract = string(in.String())
+		case "splits":
+			if in.IsNull() {
+				in.Skip()
+				out.Splits = nil
+			} else {
+				in.Delim('[')
+				if out.Splits == nil {
+					if !in.IsDelim(']') {
+						out.Splits = make([]RoyaltySplit, 0, 0)
+					} else {
+						out.Splits = []RoyaltySplit{}
+					}
+				} else {
+					out.Splits = (out.Splits)[:0]
+				}
+				for !in.IsDelim(']') {
+					var v1 RoyaltySplit
+					(v1).UnmarshalTinyJSON(in)
+					out.Splits = append(out.Splits, v1)
+					in.WantComma()
+				}
+				in.Delim(']')
+			}
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *SetRoyaltySplitsPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonB1DecodeSetRoyaltySplitsPayload(l, v)
+}
+
+// RoyaltySplitsResponse encode (output: nftContract + splits array)
+func tinyjsonB1EncodeRoyaltySplitsResponse(out *jwriter.Writer, in RoyaltySplitsResponse) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"nftContract\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.NftContract))
+	}
+	{
+		const prefix string = ",\"splits\":"
+		out.RawString(prefix)
+		if in.Splits == nil && (out.Flags&jwriter.NilSliceAsEmpty) == 0 {
+			out.RawString("null")
+		} else {
+			out.RawByte('[')
+			for vi, vs := range in.Splits {
+				if vi > 0 {
+					out.RawByte(',')
+				}
+				tinyjsonB1EncodeRoyaltySplit(out, vs)
+			}
+			out.RawByte(']')
+		}
+	}
+	out.RawByte('}')
+}
+
+func (v RoyaltySplitsResponse) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonB1EncodeRoyaltySplitsResponse(w, v)
+}
+
+// RoyaltySplitsSetEvent encode (event)
+func tinyjsonB1EncodeRoyaltySplitsSetEvent(out *jwriter.Writer, in RoyaltySplitsSetEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"nftContract\":"
+			out.RawString(p2[1:])
+			out.String(string(in.Attributes.NftContract))
+		}
+		{
+			const p2 string = ",\"count\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Count))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v RoyaltySplitsSetEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonB1EncodeRoyaltySplitsSetEvent(w, v)
+}

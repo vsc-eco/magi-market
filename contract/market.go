@@ -758,6 +758,98 @@ func SetRoyalty(payload *string) *string {
 	return jsonResponse(&SuccessResponse{Success: true})
 }
 
+//go:wasmexport setRoyaltySplits
+func SetRoyaltySplits(payload *string) *string {
+	assertInit()
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p SetRoyaltySplitsPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if p.NftContract == "" {
+		sdk.Abort("NFT contract required")
+	}
+
+	// Verify caller is the owner of the NFT collection (mirror SetRoyalty's check exactly)
+	collectionOwner := nftGetOwner(p.NftContract)
+	if collectionOwner == "" || caller != collectionOwner {
+		sdk.Abort("Only collection owner can set royalty")
+	}
+
+	if len(p.Splits) == 0 {
+		sdk.Abort("At least one royalty split required")
+	}
+	if len(p.Splits) > 10 {
+		sdk.Abort("Too many royalty splits")
+	}
+
+	var totalBps uint64
+	for _, split := range p.Splits {
+		if split.Bps == 0 {
+			sdk.Abort("Royalty split bps must be > 0")
+		}
+		if split.Recipient == "" {
+			sdk.Abort("Royalty split recipient required")
+		}
+		totalBps += split.Bps
+	}
+	if totalBps > 5000 {
+		sdk.Abort("Royalty must be <= 5000 basis points")
+	}
+
+	recips := make([]string, len(p.Splits))
+	bpss := make([]uint64, len(p.Splits))
+	for i, split := range p.Splits {
+		recips[i] = split.Recipient
+		bpss[i] = split.Bps
+	}
+	setRoyaltySplits(p.NftContract, recips, bpss)
+
+	// Keep legacy single-entry view coherent
+	setRoyaltyBps(p.NftContract, totalBps)
+	setRoyaltyRecipientState(p.NftContract, p.Splits[0].Recipient)
+
+	emitRoyaltySplitsSet(p.NftContract, uint64(len(p.Splits)))
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport getRoyaltySplits
+func GetRoyaltySplits(payload *string) *string {
+	assertInit()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p CollectionPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if p.NftContract == "" {
+		sdk.Abort("NFT contract required")
+	}
+
+	recips, bpss := resolveRoyaltySplits(p.NftContract)
+	splits := make([]RoyaltySplit, len(recips))
+	for i := range recips {
+		splits[i] = RoyaltySplit{Recipient: recips[i], Bps: bpss[i]}
+	}
+
+	return jsonResponse(&RoyaltySplitsResponse{NftContract: p.NftContract, Splits: splits})
+}
+
 //go:wasmexport setMinOffer
 func SetMinOffer(payload *string) *string {
 	assertInit()

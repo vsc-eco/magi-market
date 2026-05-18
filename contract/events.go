@@ -285,3 +285,15 @@ func emitCollectionAllowed(nftContract, by string) {
 	event.MarshalTinyJSON(&w)
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
+
+func emitRoyaltySplitsSet(nftContract string, count uint64) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := RoyaltySplitsSetEvent{
+		Type:       "royaltySplitsSet",
+		Attributes: RoyaltySplitsSetAttributes{NftContract: nftContract, Count: count},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}

@@ -529,3 +529,33 @@ type CollectionAllowedAttributes struct {
 	NftContract string `json:"nftContract"`
 	By          string `json:"by"`
 }
+
+// ===================================
+// B1: Royalty Splits Types
+// ===================================
+
+type RoyaltySplit struct {
+	Recipient string `json:"recipient"`
+	Bps       uint64 `json:"bps"`
+}
+
+type SetRoyaltySplitsPayload struct {
+	NftContract string         `json:"nftContract"`
+	Splits      []RoyaltySplit `json:"splits"`
+}
+
+type RoyaltySplitsResponse struct {
+	NftContract string         `json:"nftContract"`
+	Splits      []RoyaltySplit `json:"splits"`
+}
+
+type RoyaltySplitsSetEvent struct {
+	Type       string                      `json:"type"`
+	Attributes RoyaltySplitsSetAttributes  `json:"attributes"`
+	Tx         string                      `json:"tx"`
+}
+
+type RoyaltySplitsSetAttributes struct {
+	NftContract string `json:"nftContract"`
+	Count       uint64 `json:"count"`
+}
