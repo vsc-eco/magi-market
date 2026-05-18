@@ -29,6 +29,14 @@ const NftContractID = "nft"
 // GetContractFromDb), so the contract must be REGISTERED under the exact
 // "contract:feetoken" string the tests use as the paymentToken.
 const FeeTokenID = "contract:feetoken"
+
+// UtxoMockID is the UTXO-mapping-style mock's contract id. Like the fee token
+// it is registered under the exact "contract:utxomock" string the tests pass
+// verbatim as the marketplace paymentToken (no "contract:" prefix stripping in
+// go-vsc-node). magi-market raw-reads its `a-<acct>` BE-u64 balance state; the
+// mock has NO balanceOf entrypoint, proving the raw-read path is exercised.
+const UtxoMockID = "contract:utxomock"
+
 const ownerAddress = "hive:tibfox"
 const feeRecipientAddress = "hive:feerecipient"
 
@@ -49,6 +57,9 @@ var NftWasm []byte
 //go:embed artifacts/feetoken.wasm
 var FeeTokenWasm []byte
 
+//go:embed artifacts/utxomock.wasm
+var UtxoMockWasm []byte
+
 const defaultTimestamp = "2025-09-03T00:00:00"
 
 const gas = uint(500_000_000)
@@ -61,6 +72,7 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct.RegisterContract(TokenID, ownerAddress, TokenWasm)
 	ct.RegisterContract(NftContractID, ownerAddress, NftWasm)
 	ct.RegisterContract(FeeTokenID, ownerAddress, FeeTokenWasm)
+	ct.RegisterContract(UtxoMockID, ownerAddress, UtxoMockWasm)
 	return &ct
 }
 

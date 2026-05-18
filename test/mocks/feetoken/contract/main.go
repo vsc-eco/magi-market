@@ -30,7 +30,7 @@ func main() {}
 
 // ---------------------------------------------------------------------------
 // Hand-rolled JSON string-field extractor (substring scan, mirrors the
-// pattern in magi-market contract/internal.go tokenBalanceOf/jsonBoolField).
+// pattern in magi-market contract/internal.go tokenBalanceOf).
 // Returns the value of `"<field>":"<value>"` or "" if absent.
 // ---------------------------------------------------------------------------
 
@@ -69,20 +69,27 @@ func jsonStringField(s, field string) string {
 
 func balKey(account string) string { return "bal|" + account }
 
+// bigIntToBytes / getBal / setBal mirror magi_token-contract's byte storage:
+// big.Int.Bytes() == big-endian unsigned magnitude. magi-market's new raw-read
+// tokenBalanceOf decodes the `bal|<acct>` value via new(big.Int).SetBytes.
+func bigIntToBytes(v *big.Int) []byte {
+	b := v.Bytes()
+	if len(b) == 0 {
+		return []byte{0}
+	}
+	return b
+}
+
 func getBal(account string) *big.Int {
 	v := sdk.StateGetObject(balKey(account))
 	if v == nil || *v == "" {
 		return big.NewInt(0)
 	}
-	n, ok := new(big.Int).SetString(*v, 10)
-	if !ok {
-		return big.NewInt(0)
-	}
-	return n
+	return new(big.Int).SetBytes([]byte(*v))
 }
 
 func setBal(account string, amount *big.Int) {
-	sdk.StateSetObject(balKey(account), amount.String())
+	sdk.StateSetObject(balKey(account), string(bigIntToBytes(amount)))
 }
 
 func credit(account string, amount *big.Int) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"math/big"
 	"magi_market/sdk"
 	"strconv"
@@ -318,6 +319,65 @@ func assertPaymentTokenAllowed(token string) {
 // Cross-Contract Token Helpers (ERC-20)
 // ===================================
 
+// COUPLING WARNING: the three decoders below mirror the INTERNAL binary
+// storage formats of magi_nft, magi_token, and utxo-mapping. If any of those
+// contracts changes its internal key format or byte encoding, magi-market
+// will SILENTLY misread balances (a fund-safety bug, no compile error).
+// Before upgrading any of those contracts, re-verify these decoders against
+// the new source. Rationale:
+// docs/superpowers/specs/2026-05-17-magi-market-contract-compatibility-design.md
+
+// decodeTokenBig mirrors magi_token-contract bytesToBigInt (commit a819106):
+// big.Int.Bytes() == big-endian unsigned magnitude; absent/empty => 0.
+func decodeTokenBig(s *string) *big.Int {
+	if s == nil || *s == "" {
+		return big.NewInt(0)
+	}
+	return new(big.Int).SetBytes([]byte(*s))
+}
+
+// decodeUtxoU64 mirrors utxo-mapping getAccBal (commit 6039c43,
+// contract/mapping/utils.go): big-endian uint64, leading zero bytes trimmed;
+// absent/empty => 0.
+func decodeUtxoU64(s *string) uint64 {
+	if s == nil || *s == "" {
+		return 0
+	}
+	b := []byte(*s)
+	if len(b) > 8 {
+		sdk.Abort("utxo balance bytes >8")
+	}
+	var buf [8]byte
+	copy(buf[8-len(b):], b) // BE: right-align
+	return binary.BigEndian.Uint64(buf[:])
+}
+
+// decodeNftU64 mirrors magi_nft-contract bytesToU64 (commit 223c728,
+// contract/internal.go): little-endian uint64, trailing zero bytes trimmed;
+// absent/empty => 0.
+func decodeNftU64(s *string) uint64 {
+	if s == nil || *s == "" {
+		return 0
+	}
+	b := []byte(*s)
+	if len(b) > 8 {
+		sdk.Abort("nft balance bytes >8")
+	}
+	var buf [8]byte
+	copy(buf[:], b) // LE: stored bytes are least-significant, at the start
+	return binary.LittleEndian.Uint64(buf[:])
+}
+
+func tokenBalanceOf(tokenContract, account string) *big.Int {
+	if v := sdk.ContractStateGet(tokenContract, "bal|"+account); v != nil && *v != "" {
+		return decodeTokenBig(v)
+	}
+	if v := sdk.ContractStateGet(tokenContract, "a-"+account); v != nil && *v != "" {
+		return new(big.Int).SetUint64(decodeUtxoU64(v))
+	}
+	return big.NewInt(0)
+}
+
 // ===================================
 // Cross-Contract NFT Helpers (ERC-1155)
 // ===================================
@@ -330,86 +390,26 @@ func nftSafeTransferFrom(nftContract, from, to, tokenId string, amount uint64) {
 	}
 }
 
-func nftIsSoulbound(nftContract, tokenId string) bool {
-	payload := `{"id":"` + tokenId + `"}`
-	result := sdk.ContractCallSimple(nftContract, "isSoulbound", payload)
-	if result == nil {
-		return false
-	}
-	return jsonBoolField(*result, "soulbound")
+func nftBalanceOf(nftContract, account, tokenId string) uint64 {
+	return decodeNftU64(sdk.ContractStateGet(nftContract, "bal|"+account+"|"+tokenId))
 }
 
-func nftBalanceOf(nftContract, account, tokenId string) uint64 {
-	payload := `{"account":"` + account + `","id":"` + tokenId + `"}`
-	result := sdk.ContractCallSimple(nftContract, "balanceOf", payload)
-	if result == nil {
-		return 0
-	}
-	// Parse {"balance":N} or {"balance":"N"} or {"balance": N}
-	s := *result
-	key := `"balance":`
-	idx := -1
-	for i := 0; i <= len(s)-len(key); i++ {
-		if s[i:i+len(key)] == key {
-			idx = i + len(key)
-			break
-		}
-	}
-	if idx < 0 {
-		return 0
-	}
-	// Skip whitespace
-	for idx < len(s) && (s[idx] == ' ' || s[idx] == '\t' || s[idx] == '\n') {
-		idx++
-	}
-	if idx >= len(s) {
-		return 0
-	}
-	// Handle quoted value: "balance":"123"
-	quoted := false
-	if s[idx] == '"' {
-		quoted = true
-		idx++
-	}
-	// Read digits
-	end := idx
-	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
-		end++
-	}
-	if end == idx {
-		return 0
-	}
-	// Verify closing quote if quoted
-	if quoted && (end >= len(s) || s[end] != '"') {
-		return 0
-	}
-	val, _ := strconv.ParseUint(s[idx:end], 10, 64)
-	return val
+func nftIsApprovedForAll(nftContract, account, operator string) bool {
+	v := sdk.ContractStateGet(nftContract, "op|"+account+"|"+operator)
+	return v != nil && *v == "1"
+}
+
+func nftIsSoulbound(nftContract, tokenId string) bool {
+	v := sdk.ContractStateGet(nftContract, "sb|"+tokenId)
+	return v != nil && *v == "1"
 }
 
 func nftGetOwner(nftContract string) string {
-	result := sdk.ContractCallSimple(nftContract, "getOwner", "{}")
-	if result == nil {
+	v := sdk.ContractStateGet(nftContract, "owner")
+	if v == nil {
 		return ""
 	}
-	// Parse {"owner":"..."} - extract the owner value
-	s := *result
-	key := `"owner":"`
-	idx := -1
-	for i := 0; i <= len(s)-len(key); i++ {
-		if s[i:i+len(key)] == key {
-			idx = i + len(key)
-			break
-		}
-	}
-	if idx < 0 {
-		return ""
-	}
-	end := idx
-	for end < len(s) && s[end] != '"' {
-		end++
-	}
-	return s[idx:end]
+	return *v
 }
 
 // ===================================
@@ -451,78 +451,6 @@ func jsonResponse(marshaler interface{ MarshalTinyJSON(*jwriter.Writer) }) *stri
 	marshaler.MarshalTinyJSON(&w)
 	result := string(w.Buffer.BuildBytes())
 	return &result
-}
-
-// ===================================
-// Cross-Contract Helpers (big.Int / approval)
-// ===================================
-
-// jsonBoolField returns true iff "<field>": true appears in s.
-func jsonBoolField(s, field string) bool {
-	key := `"` + field + `":`
-	idx := -1
-	for i := 0; i <= len(s)-len(key); i++ {
-		if s[i:i+len(key)] == key {
-			idx = i + len(key)
-			break
-		}
-	}
-	if idx < 0 {
-		return false
-	}
-	for idx < len(s) && (s[idx] == ' ' || s[idx] == '\t' || s[idx] == '\n') {
-		idx++
-	}
-	return idx+4 <= len(s) && s[idx:idx+4] == "true"
-}
-
-// nftIsApprovedForAll checks operator approval on the NFT contract.
-func nftIsApprovedForAll(nftContract, account, operator string) bool {
-	payload := `{"account":"` + account + `","operator":"` + operator + `"}`
-	result := sdk.ContractCallSimple(nftContract, "isApprovedForAll", payload)
-	if result == nil {
-		return false
-	}
-	return jsonBoolField(*result, "approved")
-}
-
-// tokenBalanceOf reads an ERC-20-style balance as big.Int (string or numeric JSON).
-func tokenBalanceOf(tokenContract, account string) *big.Int {
-	payload := `{"account":"` + account + `"}`
-	result := sdk.ContractCallSimple(tokenContract, "balanceOf", payload)
-	if result == nil {
-		return big.NewInt(0)
-	}
-	s := *result
-	key := `"balance":`
-	idx := -1
-	for i := 0; i <= len(s)-len(key); i++ {
-		if s[i:i+len(key)] == key {
-			idx = i + len(key)
-			break
-		}
-	}
-	if idx < 0 {
-		return big.NewInt(0)
-	}
-	for idx < len(s) && (s[idx] == ' ' || s[idx] == '\t' || s[idx] == '\n') {
-		idx++
-	}
-	if idx < len(s) && s[idx] == '"' {
-		idx++
-	}
-	end := idx
-	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
-		end++
-	}
-	if end == idx {
-		return big.NewInt(0)
-	}
-	v, ok := new(big.Int).SetString(s[idx:end], 10)
-	if !ok {
-		return big.NewInt(0)
-	}
-	return v
 }
 
 // escrowIn pulls `requested` from payer into the marketplace and returns the
