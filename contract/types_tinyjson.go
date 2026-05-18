@@ -6732,3 +6732,364 @@ func tinyjsonC2EncodeSweptEvent(out *jwriter.Writer, in SweptEvent) {
 func (v SweptEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonC2EncodeSweptEvent(w, v)
 }
+
+// ---- hand-added (sub-project C3): bundle structs ----
+
+// BundleItem encode/decode (used within array encoders/decoders)
+func tinyjsonC3EncodeBundleItem(out *jwriter.Writer, in BundleItem) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"tokenId\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.TokenId))
+	}
+	{
+		const prefix string = ",\"amount\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.Amount))
+	}
+	out.RawByte('}')
+}
+
+func tinyjsonC3DecodeBundleItem(in *jlexer.Lexer, out *BundleItem) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "tokenId":
+			out.TokenId = string(in.String())
+		case "amount":
+			out.Amount = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v BundleItem) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBundleItem(w, v)
+}
+func (v *BundleItem) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonC3DecodeBundleItem(l, v)
+}
+
+// ListBundlePayload decode (input: nftContract, items []BundleItem, paymentToken, price, expirationBlock)
+func tinyjsonC3DecodeListBundlePayload(in *jlexer.Lexer, out *ListBundlePayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "nftContract":
+			out.NftContract = string(in.String())
+		case "paymentToken":
+			out.PaymentToken = string(in.String())
+		case "price":
+			out.Price = string(in.String())
+		case "expirationBlock":
+			out.ExpirationBlock = uint64(in.Uint64())
+		case "items":
+			if in.IsNull() {
+				in.Skip()
+				out.Items = nil
+			} else {
+				in.Delim('[')
+				if out.Items == nil {
+					if !in.IsDelim(']') {
+						out.Items = make([]BundleItem, 0, 0)
+					} else {
+						out.Items = []BundleItem{}
+					}
+				} else {
+					out.Items = (out.Items)[:0]
+				}
+				for !in.IsDelim(']') {
+					var v1 BundleItem
+					(v1).UnmarshalTinyJSON(in)
+					out.Items = append(out.Items, v1)
+					in.WantComma()
+				}
+				in.Delim(']')
+			}
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *ListBundlePayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonC3DecodeListBundlePayload(l, v)
+}
+
+// BundleIdPayload decode (input: bundleId uint64)
+func tinyjsonC3DecodeBundleIdPayload(in *jlexer.Lexer, out *BundleIdPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "bundleId":
+			out.BundleId = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *BundleIdPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonC3DecodeBundleIdPayload(l, v)
+}
+
+// BundleResponse encode (output: bundleId, seller, nftContract, items []BundleItem, paymentToken, price, active, expirationBlock)
+func tinyjsonC3EncodeBundleResponse(out *jwriter.Writer, in BundleResponse) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"bundleId\":"
+		out.RawString(prefix[1:])
+		out.Uint64(uint64(in.BundleId))
+	}
+	{
+		const prefix string = ",\"seller\":"
+		out.RawString(prefix)
+		out.String(string(in.Seller))
+	}
+	{
+		const prefix string = ",\"nftContract\":"
+		out.RawString(prefix)
+		out.String(string(in.NftContract))
+	}
+	{
+		const prefix string = ",\"items\":"
+		out.RawString(prefix)
+		if in.Items == nil && (out.Flags&jwriter.NilSliceAsEmpty) == 0 {
+			out.RawString("null")
+		} else {
+			out.RawByte('[')
+			for vi, vs := range in.Items {
+				if vi > 0 {
+					out.RawByte(',')
+				}
+				tinyjsonC3EncodeBundleItem(out, vs)
+			}
+			out.RawByte(']')
+		}
+	}
+	{
+		const prefix string = ",\"paymentToken\":"
+		out.RawString(prefix)
+		out.String(string(in.PaymentToken))
+	}
+	{
+		const prefix string = ",\"price\":"
+		out.RawString(prefix)
+		out.String(string(in.Price))
+	}
+	{
+		const prefix string = ",\"active\":"
+		out.RawString(prefix)
+		out.Bool(bool(in.Active))
+	}
+	{
+		const prefix string = ",\"expirationBlock\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.ExpirationBlock))
+	}
+	out.RawByte('}')
+}
+
+func (v BundleResponse) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBundleResponse(w, v)
+}
+
+// BundleListedEvent encode
+func tinyjsonC3EncodeBundleListedEvent(out *jwriter.Writer, in BundleListedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"bundleId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.BundleId))
+		}
+		{
+			const p2 string = ",\"seller\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Seller))
+		}
+		{
+			const p2 string = ",\"nftContract\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.NftContract))
+		}
+		{
+			const p2 string = ",\"count\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Count))
+		}
+		{
+			const p2 string = ",\"price\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Price))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v BundleListedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBundleListedEvent(w, v)
+}
+
+// BundleBoughtEvent encode
+func tinyjsonC3EncodeBundleBoughtEvent(out *jwriter.Writer, in BundleBoughtEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"bundleId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.BundleId))
+		}
+		{
+			const p2 string = ",\"buyer\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Buyer))
+		}
+		{
+			const p2 string = ",\"totalPrice\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.TotalPrice))
+		}
+		{
+			const p2 string = ",\"fee\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Fee))
+		}
+		{
+			const p2 string = ",\"royalty\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Royalty))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v BundleBoughtEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBundleBoughtEvent(w, v)
+}
+
+// BundleDelistedEvent encode
+func tinyjsonC3EncodeBundleDelistedEvent(out *jwriter.Writer, in BundleDelistedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"bundleId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.BundleId))
+		}
+		{
+			const p2 string = ",\"seller\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Seller))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v BundleDelistedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBundleDelistedEvent(w, v)
+}

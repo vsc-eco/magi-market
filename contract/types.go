@@ -617,3 +617,74 @@ type CollectionFeeClearedEvent struct {
 type CollectionFeeClearedAttributes struct {
 	NftContract string `json:"nftContract"`
 }
+
+// ===================================
+// C3: Bundle Types
+// ===================================
+
+type BundleItem struct {
+	TokenId string `json:"tokenId"`
+	Amount  uint64 `json:"amount"`
+}
+
+type ListBundlePayload struct {
+	NftContract     string       `json:"nftContract"`
+	Items           []BundleItem `json:"items"`
+	PaymentToken    string       `json:"paymentToken"`
+	Price           string       `json:"price"`
+	ExpirationBlock uint64       `json:"expirationBlock"`
+}
+
+type BundleIdPayload struct {
+	BundleId uint64 `json:"bundleId"`
+}
+
+type BundleResponse struct {
+	BundleId        uint64       `json:"bundleId"`
+	Seller          string       `json:"seller"`
+	NftContract     string       `json:"nftContract"`
+	Items           []BundleItem `json:"items"`
+	PaymentToken    string       `json:"paymentToken"`
+	Price           string       `json:"price"`
+	Active          bool         `json:"active"`
+	ExpirationBlock uint64       `json:"expirationBlock"`
+}
+
+type BundleListedEvent struct {
+	Type       string                  `json:"type"`
+	Attributes BundleListedAttributes  `json:"attributes"`
+	Tx         string                  `json:"tx"`
+}
+
+type BundleListedAttributes struct {
+	BundleId    uint64 `json:"bundleId"`
+	Seller      string `json:"seller"`
+	NftContract string `json:"nftContract"`
+	Count       uint64 `json:"count"`
+	Price       string `json:"price"`
+}
+
+type BundleBoughtEvent struct {
+	Type       string                  `json:"type"`
+	Attributes BundleBoughtAttributes  `json:"attributes"`
+	Tx         string                  `json:"tx"`
+}
+
+type BundleBoughtAttributes struct {
+	BundleId   uint64 `json:"bundleId"`
+	Buyer      string `json:"buyer"`
+	TotalPrice string `json:"totalPrice"`
+	Fee        string `json:"fee"`
+	Royalty    string `json:"royalty"`
+}
+
+type BundleDelistedEvent struct {
+	Type       string                    `json:"type"`
+	Attributes BundleDelistedAttributes  `json:"attributes"`
+	Tx         string                    `json:"tx"`
+}
+
+type BundleDelistedAttributes struct {
+	BundleId uint64 `json:"bundleId"`
+	Seller   string `json:"seller"`
+}

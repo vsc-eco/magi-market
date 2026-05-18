@@ -226,6 +226,236 @@ func TestFloorSweepSlippageGuard(t *testing.T) {
 	assert.Equal(t, buyerBefore, buyerAfter, "buyer should not have lost tokens on failed sweep")
 }
 
+// ===================================
+// C3: Bundle Tests
+// ===================================
+
+// bundleItemsJSON builds the JSON items array for a listBundle payload.
+func bundleItemsJSON(items [][2]string) string {
+	// items: each [tokenId, amount]
+	s := "["
+	for i, item := range items {
+		if i > 0 {
+			s += ","
+		}
+		s += fmt.Sprintf(`{"tokenId":"%s","amount":%s}`, item[0], item[1])
+	}
+	s += "]"
+	return s
+}
+
+// BundleResult mirrors BundleResponse from the contract.
+type BundleResult struct {
+	BundleId        uint64              `json:"bundleId"`
+	Seller          string              `json:"seller"`
+	NftContract     string              `json:"nftContract"`
+	Items           []BundleItemResult  `json:"items"`
+	PaymentToken    string              `json:"paymentToken"`
+	Price           string              `json:"price"`
+	Active          bool                `json:"active"`
+	ExpirationBlock uint64              `json:"expirationBlock"`
+}
+
+type BundleItemResult struct {
+	TokenId string `json:"tokenId"`
+	Amount  uint64 `json:"amount"`
+}
+
+func ParseBundle(result test_utils.ContractTestCallResult) BundleResult {
+	var resp BundleResult
+	json.Unmarshal([]byte(result.Ret), &resp)
+	return resp
+}
+
+// TestBundleAtomicBuy: seller mints 3 tokenIds, approves, listBundle 3 items price "10000";
+// buyer buyBundle; assert all 3 items now buyer-held, seller paid received-fee-royalty,
+// fee+royalty recipients paid, market residual 0, bundle inactive, bundle_bought event totalPrice=="10000".
+func TestBundleAtomicBuy(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:buyer"
+
+	// Mint 3 distinct token IDs to seller
+	MintNft(t, ct, seller, "101", 2, 10)
+	MintNft(t, ct, seller, "102", 3, 10)
+	MintNft(t, ct, seller, "103", 1, 10)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 20000)
+
+	feeRecipBefore := QueryTokenBalance(t, ct, feeRecipientAddress)
+	sellerBefore := QueryTokenBalance(t, ct, seller)
+
+	// List bundle: 3 items (amounts 2, 3, 1), total price 10000
+	items := bundleItemsJSON([][2]string{{"101", "2"}, {"102", "3"}, {"103", "1"}})
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","items":%s,"paymentToken":"%s","price":"10000","expirationBlock":0}`,
+		NftContractID, items, TokenID)
+	listResult, _, _ := CallMarket(t, ct, "listBundle", []byte(listPayload), nil, seller, "", true, gas, "")
+	created := ParseCreated(listResult)
+	bundleId := created.Id
+
+	// getBundle should show active
+	getPayload := fmt.Sprintf(`{"bundleId":%d}`, bundleId)
+	getResult, _, _ := CallMarket(t, ct, "getBundle", []byte(getPayload), nil, "hive:anyone", "", true, gas, "")
+	bundle := ParseBundle(getResult)
+	assert.True(t, bundle.Active, "bundle should be active after listing")
+	assert.Equal(t, seller, bundle.Seller)
+	assert.Equal(t, NftContractID, bundle.NftContract)
+	assert.Equal(t, "10000", bundle.Price)
+	assert.Len(t, bundle.Items, 3)
+
+	// Buy bundle
+	buyPayload := fmt.Sprintf(`{"bundleId":%d}`, bundleId)
+	_, _, logs := CallMarket(t, ct, "buyBundle", []byte(buyPayload), nil, buyer, "", true, gas, "")
+
+	// All 3 NFTs should be with buyer
+	assert.Equal(t, uint64(2), QueryNftBalance(t, ct, buyer, "101"), "buyer should have 2 of token 101")
+	assert.Equal(t, uint64(3), QueryNftBalance(t, ct, buyer, "102"), "buyer should have 3 of token 102")
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, buyer, "103"), "buyer should have 1 of token 103")
+
+	// Seller should have NFTs gone
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "101"))
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "102"))
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "103"))
+
+	// Fee recipient should have received fee (250 bps of 10000 = 250)
+	feeRecipAfter := QueryTokenBalance(t, ct, feeRecipientAddress)
+	assert.Equal(t, feeRecipBefore+250, feeRecipAfter, "fee recipient should have received 250")
+
+	// Seller should have received net payment (10000 - 250 fee - 0 royalty = 9750)
+	sellerAfter := QueryTokenBalance(t, ct, seller)
+	assert.Equal(t, sellerBefore+9750, sellerAfter, "seller should have received 9750")
+
+	// Market residual should be 0
+	marketBal := QueryTokenBalance(t, ct, MarketContractAddress)
+	assert.Equal(t, uint64(0), marketBal, "market should have zero residual")
+
+	// Bundle should be inactive
+	getResult2, _, _ := CallMarket(t, ct, "getBundle", []byte(getPayload), nil, "hive:anyone", "", true, gas, "")
+	bundle2 := ParseBundle(getResult2)
+	assert.False(t, bundle2.Active, "bundle should be inactive after buy")
+
+	// Event bundle_bought should have totalPrice==10000
+	AssertEventEmitted(t, logs, "bundle_bought")
+	AssertEventContains(t, logs, "bundle_bought", `"totalPrice":"10000"`)
+}
+
+// TestBundleOneItemMissingRevertsAll: list bundle, seller transfers one item away so it's no longer held;
+// buyBundle aborts; assert NO item moved to buyer and escrow returned (buyer token balance unchanged).
+func TestBundleOneItemMissingRevertsAll(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:buyer"
+
+	MintNft(t, ct, seller, "201", 1, 10)
+	MintNft(t, ct, seller, "202", 1, 10)
+	MintNft(t, ct, seller, "203", 1, 10)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 20000)
+
+	// List bundle
+	items := bundleItemsJSON([][2]string{{"201", "1"}, {"202", "1"}, {"203", "1"}})
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","items":%s,"paymentToken":"%s","price":"5000","expirationBlock":0}`,
+		NftContractID, items, TokenID)
+	listResult, _, _ := CallMarket(t, ct, "listBundle", []byte(listPayload), nil, seller, "", true, gas, "")
+	bundleId := ParseCreated(listResult).Id
+
+	// Seller transfers token 202 away to a third party (making the bundle unbuyable)
+	thirdParty := "hive:thirdparty"
+	CallNft(t, ct, "safeTransferFrom",
+		[]byte(fmt.Sprintf(`{"from":"%s","to":"%s","id":"202","amount":1,"data":""}`, seller, thirdParty)),
+		nil, seller, true, gas, "")
+
+	buyerBefore := QueryTokenBalance(t, ct, buyer)
+
+	// buyBundle should abort (seller no longer holds token 202)
+	buyPayload := fmt.Sprintf(`{"bundleId":%d}`, bundleId)
+	CallMarket(t, ct, "buyBundle", []byte(buyPayload), nil, buyer, "", false, gas, "")
+
+	// No items should have moved to buyer
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, buyer, "201"), "buyer should NOT have token 201")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, buyer, "202"), "buyer should NOT have token 202")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, buyer, "203"), "buyer should NOT have token 203")
+
+	// Buyer token balance should be unchanged (escrow reverted)
+	buyerAfter := QueryTokenBalance(t, ct, buyer)
+	assert.Equal(t, buyerBefore, buyerAfter, "buyer token balance should be unchanged after failed buyBundle")
+}
+
+// TestDelistBundleNoNftMove: list then delistBundle → bundle inactive, seller NFT balances unchanged.
+func TestDelistBundleNoNftMove(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+
+	MintNft(t, ct, seller, "301", 2, 10)
+	MintNft(t, ct, seller, "302", 1, 10)
+	ApproveNftForMarket(t, ct, seller)
+
+	items := bundleItemsJSON([][2]string{{"301", "2"}, {"302", "1"}})
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","items":%s,"paymentToken":"%s","price":"3000","expirationBlock":0}`,
+		NftContractID, items, TokenID)
+	listResult, _, _ := CallMarket(t, ct, "listBundle", []byte(listPayload), nil, seller, "", true, gas, "")
+	bundleId := ParseCreated(listResult).Id
+
+	// Seller NFTs still held (approval-custody, nothing escrowed)
+	assert.Equal(t, uint64(2), QueryNftBalance(t, ct, seller, "301"))
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, seller, "302"))
+
+	// Delist
+	delistPayload := fmt.Sprintf(`{"bundleId":%d}`, bundleId)
+	CallMarket(t, ct, "delistBundle", []byte(delistPayload), nil, seller, "", true, gas, "")
+
+	// Bundle inactive
+	getResult, _, _ := CallMarket(t, ct, "getBundle", []byte(fmt.Sprintf(`{"bundleId":%d}`, bundleId)),
+		nil, "hive:anyone", "", true, gas, "")
+	bundle := ParseBundle(getResult)
+	assert.False(t, bundle.Active, "bundle should be inactive after delist")
+
+	// Seller still holds their NFTs
+	assert.Equal(t, uint64(2), QueryNftBalance(t, ct, seller, "301"), "seller should still have token 301")
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, seller, "302"), "seller should still have token 302")
+}
+
+// TestBundleDeniedCollectionBlocked: denyCollection(nc) then listBundle aborts "Collection is denied";
+// a pre-listed bundle then denied → buyBundle aborts.
+func TestBundleDeniedCollectionBlocked(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:buyer"
+
+	MintNft(t, ct, seller, "401", 1, 10)
+	MintNft(t, ct, seller, "402", 1, 10)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 10000)
+
+	// List a bundle BEFORE denying
+	items := bundleItemsJSON([][2]string{{"401", "1"}, {"402", "1"}})
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","items":%s,"paymentToken":"%s","price":"2000","expirationBlock":0}`,
+		NftContractID, items, TokenID)
+	listResult, _, _ := CallMarket(t, ct, "listBundle", []byte(listPayload), nil, seller, "", true, gas, "")
+	bundleId := ParseCreated(listResult).Id
+
+	// Deny the collection
+	denyPayload := fmt.Sprintf(`{"nftContract":"%s"}`, NftContractID)
+	CallMarket(t, ct, "denyCollection", []byte(denyPayload), nil, ownerAddress, "", true, gas, "")
+
+	// listBundle on denied collection should abort
+	listPayload2 := fmt.Sprintf(`{"nftContract":"%s","items":%s,"paymentToken":"%s","price":"1000","expirationBlock":0}`,
+		NftContractID, items, TokenID)
+	CallMarket(t, ct, "listBundle", []byte(listPayload2), nil, seller, "", false, gas, "Collection is denied")
+
+	// buyBundle on pre-listed bundle with denied collection should also abort
+	buyPayload := fmt.Sprintf(`{"bundleId":%d}`, bundleId)
+	CallMarket(t, ct, "buyBundle", []byte(buyPayload), nil, buyer, "", false, gas, "Collection is denied")
+}
+
 // TestFloorSweepRejectsForeignCollection verifies that including a listing from
 // a different NFT collection aborts the entire sweep.
 func TestFloorSweepRejectsForeignCollection(t *testing.T) {

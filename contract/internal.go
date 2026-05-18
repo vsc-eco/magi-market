@@ -417,6 +417,72 @@ func loadAuctionRoyaltySplitSnapshot(id uint64, fallbackRecip string, fallbackBp
 }
 
 // ===================================
+// Bundle State Helpers (C3)
+// ===================================
+
+func bundleKey(id uint64, field string) string {
+	return "bnd|" + strconv.FormatUint(id, 10) + "|" + field
+}
+
+func setBundleField(id uint64, field, value string) {
+	sdk.StateSetObject(bundleKey(id, field), value)
+}
+
+func getBundleField(id uint64, field string) string {
+	return getStringState(bundleKey(id, field))
+}
+
+func getBundleUint64(id uint64, field string) uint64 {
+	return getUint64State(bundleKey(id, field))
+}
+
+func setBundleUint64(id uint64, field string, val uint64) {
+	setUint64State(bundleKey(id, field), val)
+}
+
+func isBundleActive(id uint64) bool {
+	return getBundleField(id, "act") == "1"
+}
+
+func getNextBundleId() uint64 {
+	return getUint64State("nxt_bnd")
+}
+
+func setNextBundleId(id uint64) {
+	setUint64State("nxt_bnd", id)
+}
+
+// snapshotRoyaltySplitsForBundle mirrors snapshotRoyaltySplitsForListing using bundleKey prefix.
+func snapshotRoyaltySplitsForBundle(id uint64, recips []string, bpss []uint64) {
+	n := uint64(len(recips))
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		setBundleField(id, "rs_"+is+"_r", recips[i])
+		setBundleUint64(id, "rs_"+is+"_b", bpss[i])
+	}
+	setBundleUint64(id, "rs_n", n)
+}
+
+// loadBundleRoyaltySplitSnapshot mirrors loadListingRoyaltySplitSnapshot using bundleKey prefix.
+func loadBundleRoyaltySplitSnapshot(id uint64, fallbackRecip string, fallbackBps uint64) ([]string, []uint64) {
+	n := getBundleUint64(id, "rs_n")
+	if n > 0 {
+		recips := make([]string, n)
+		bpss := make([]uint64, n)
+		for i := uint64(0); i < n; i++ {
+			is := strconv.FormatUint(i, 10)
+			recips[i] = getBundleField(id, "rs_"+is+"_r")
+			bpss[i] = getBundleUint64(id, "rs_"+is+"_b")
+		}
+		return recips, bpss
+	}
+	if fallbackBps > 0 && fallbackRecip != "" {
+		return []string{fallbackRecip}, []uint64{fallbackBps}
+	}
+	return []string{}, []uint64{}
+}
+
+// ===================================
 // Min Offer Helpers
 // ===================================
 

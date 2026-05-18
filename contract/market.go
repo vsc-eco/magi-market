@@ -2,6 +2,7 @@ package main
 
 import (
 	"magi_market/sdk"
+	"strconv"
 
 	"github.com/CosmWasm/tinyjson/jlexer"
 )
@@ -1096,6 +1097,242 @@ func Sweep(payload *string) *string {
 
 	emitSwept(caller, uint64(len(p.ListingIds)), formatMoney(total))
 	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+// ===================================
+// C3: Bundle Functions
+// ===================================
+
+//go:wasmexport listBundle
+func ListBundle(payload *string) *string {
+	assertInit()
+	assertNotPaused()
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p ListBundlePayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if p.NftContract == "" || p.PaymentToken == "" {
+		sdk.Abort("NFT contract and payment token required")
+	}
+	if len(p.Items) == 0 {
+		sdk.Abort("At least one item required")
+	}
+	if len(p.Items) > 20 {
+		sdk.Abort("Too many bundle items")
+	}
+	for _, item := range p.Items {
+		if item.TokenId == "" {
+			sdk.Abort("Token ID required for each bundle item")
+		}
+		if item.Amount == 0 {
+			sdk.Abort("Amount must be greater than zero for each bundle item")
+		}
+	}
+
+	price := parseMoney(p.Price)
+	if mIsZero(price) {
+		sdk.Abort("Price must be greater than zero")
+	}
+
+	assertPaymentTokenAllowed(p.PaymentToken)
+	assertCollectionAllowed(p.NftContract)
+
+	// Approval-custody preflight for every item
+	contractAddr := getContractAddress()
+	for _, item := range p.Items {
+		if nftIsSoulbound(p.NftContract, item.TokenId) {
+			sdk.Abort("Cannot list soulbound tokens")
+		}
+		if !nftIsApprovedForAll(p.NftContract, caller, contractAddr) {
+			sdk.Abort("Marketplace not approved as operator for this NFT collection")
+		}
+		if nftBalanceOf(p.NftContract, caller, item.TokenId) < item.Amount {
+			sdk.Abort("Insufficient NFT balance to list")
+		}
+	}
+
+	feeBps := getEffectiveFeeBps(p.NftContract)
+	royaltyBps := getRoyaltyBps(p.NftContract)
+	if feeBps+royaltyBps > 10000 {
+		sdk.Abort("Combined fee and royalty exceed 100%")
+	}
+
+	id := getNextBundleId()
+	setBundleField(id, "s", caller)
+	setBundleField(id, "nc", p.NftContract)
+	setBundleField(id, "pt", p.PaymentToken)
+	setBundleMoney(id, "p", price)
+	setBundleField(id, "act", "1")
+	setBundleUint64(id, "exp", p.ExpirationBlock)
+	setBundleUint64(id, "n", uint64(len(p.Items)))
+	for i, item := range p.Items {
+		is := strconv.FormatUint(uint64(i), 10)
+		setBundleField(id, is+"_ti", item.TokenId)
+		setBundleUint64(id, is+"_amt", item.Amount)
+	}
+	setBundleUint64(id, "fb", feeBps)
+	setBundleField(id, "rr", getRoyaltyRecipient(p.NftContract))
+	// Snapshot resolved royalty splits so in-flight bundles are unaffected by later split changes.
+	snapRecips, snapBps := resolveRoyaltySplits(p.NftContract)
+	snapshotRoyaltySplitsForBundle(id, snapRecips, snapBps)
+	setNextBundleId(id + 1)
+
+	emitBundleListed(id, caller, p.NftContract, uint64(len(p.Items)), formatMoney(price))
+	return jsonResponse(&CreatedResponse{Success: true, Id: id})
+}
+
+//go:wasmexport buyBundle
+func BuyBundle(payload *string) *string {
+	assertInit()
+	assertNotPaused()
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p BundleIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if !isBundleActive(p.BundleId) {
+		sdk.Abort("Bundle not active")
+	}
+	if isExpired(getBundleUint64(p.BundleId, "exp")) {
+		sdk.Abort("Bundle has expired")
+	}
+
+	nc := getBundleField(p.BundleId, "nc")
+	assertCollectionAllowed(nc)
+
+	seller := getBundleField(p.BundleId, "s")
+	if caller == seller {
+		sdk.Abort("Seller cannot buy own bundle")
+	}
+
+	pt := getBundleField(p.BundleId, "pt")
+	price := getBundleMoney(p.BundleId, "p")
+
+	received := escrowIn(pt, caller, price)
+
+	lockedFeeBps := getBundleUint64(p.BundleId, "fb")
+	lockedRoyaltyBps := getRoyaltyBps(nc) // for fallback in snapshot loader
+	royaltyRecipient := getBundleField(p.BundleId, "rr")
+
+	// Load royalty split snapshot; fall back to legacy single-entry for pre-B2 in-flight entries.
+	snapRecips, snapBps := loadBundleRoyaltySplitSnapshot(p.BundleId, royaltyRecipient, lockedRoyaltyBps)
+	fee, royTot, sellerPayment := feeAndRoyaltyOf(received, lockedFeeBps, snapRecips, snapBps)
+
+	// Transfer ALL items seller -> buyer BEFORE any payouts (atomic: any abort reverts whole tx)
+	n := getBundleUint64(p.BundleId, "n")
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		ti := getBundleField(p.BundleId, is+"_ti")
+		amt := getBundleUint64(p.BundleId, is+"_amt")
+		nftSafeTransferFrom(nc, seller, caller, ti, amt)
+	}
+
+	// Payouts
+	if !mIsZero(fee) {
+		tokenTransferBig(pt, getFeeRecipient(), fee)
+	}
+	distributeRoyaltySplitsResolved(pt, received, snapRecips, snapBps)
+	if !mIsZero(sellerPayment) {
+		tokenTransferBig(pt, seller, sellerPayment)
+	}
+
+	setBundleField(p.BundleId, "act", "0")
+	emitBundleBought(p.BundleId, caller, formatMoney(received), formatMoney(fee), formatMoney(royTot))
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport delistBundle
+func DelistBundle(payload *string) *string {
+	assertInit()
+	// Note: delistBundle is intentionally allowed when paused so sellers can
+	// cancel bundles freely during a contract pause (no NFT is escrowed).
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p BundleIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if !isBundleActive(p.BundleId) {
+		sdk.Abort("Bundle not active")
+	}
+
+	seller := getBundleField(p.BundleId, "s")
+	if caller != seller {
+		sdk.Abort("Only seller can delist bundle")
+	}
+
+	setBundleField(p.BundleId, "act", "0")
+	emitBundleDelisted(p.BundleId, seller)
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport getBundle
+func GetBundle(payload *string) *string {
+	assertInit()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p BundleIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	seller := getBundleField(p.BundleId, "s")
+	if seller == "" {
+		sdk.Abort("Bundle not found")
+	}
+
+	n := getBundleUint64(p.BundleId, "n")
+	items := make([]BundleItem, n)
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		items[i] = BundleItem{
+			TokenId: getBundleField(p.BundleId, is+"_ti"),
+			Amount:  getBundleUint64(p.BundleId, is+"_amt"),
+		}
+	}
+
+	return jsonResponse(&BundleResponse{
+		BundleId:        p.BundleId,
+		Seller:          seller,
+		NftContract:     getBundleField(p.BundleId, "nc"),
+		Items:           items,
+		PaymentToken:    getBundleField(p.BundleId, "pt"),
+		Price:           formatMoney(getBundleMoney(p.BundleId, "p")),
+		Active:          isBundleActive(p.BundleId),
+		ExpirationBlock: getBundleUint64(p.BundleId, "exp"),
+	})
 }
 
 // ===================================

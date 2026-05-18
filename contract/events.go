@@ -333,3 +333,43 @@ func emitSwept(buyer string, count uint64, total string) {
 	event.MarshalTinyJSON(&w)
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
+
+func emitBundleListed(bundleId uint64, seller, nftContract string, count uint64, price string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BundleListedEvent{
+		Type: "bundle_listed",
+		Attributes: BundleListedAttributes{
+			BundleId: bundleId, Seller: seller, NftContract: nftContract, Count: count, Price: price,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitBundleBought(bundleId uint64, buyer, totalPrice, fee, royalty string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BundleBoughtEvent{
+		Type: "bundle_bought",
+		Attributes: BundleBoughtAttributes{
+			BundleId: bundleId, Buyer: buyer, TotalPrice: totalPrice, Fee: fee, Royalty: royalty,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitBundleDelisted(bundleId uint64, seller string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BundleDelistedEvent{
+		Type:       "bundle_delisted",
+		Attributes: BundleDelistedAttributes{BundleId: bundleId, Seller: seller},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
