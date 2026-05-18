@@ -109,6 +109,39 @@ func doList(caller string, p *ListPayload) uint64 {
 		}
 	}
 
+	// F2: validate settleToken / dexPool / minSettleOut
+	if p.SettleToken != "" {
+		if p.PayoutMode == "unmap" {
+			sdk.Abort("payout and settleToken are mutually exclusive")
+		}
+		if p.DexPool == "" {
+			sdk.Abort("dexPool required for settleToken")
+		}
+		if p.SettleToken == p.PaymentToken {
+			sdk.Abort("settleToken must differ from paymentToken")
+		}
+		// minSettleOut must be a valid positive decimal (parseMoney aborts on invalid).
+		mso := parseMoney(p.MinSettleOut)
+		if mIsZero(mso) {
+			sdk.Abort("minSettleOut must be greater than zero")
+		}
+		// Injection allowlist: dexPool and settleToken are string-concatenated into JSON.
+		for i := 0; i < len(p.DexPool); i++ {
+			c := p.DexPool[i]
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == ':' || c == '-') {
+				sdk.Abort("dexPool contains invalid characters")
+			}
+		}
+		for i := 0; i < len(p.SettleToken); i++ {
+			c := p.SettleToken[i]
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == ':' || c == '-') {
+				sdk.Abort("settleToken contains invalid characters")
+			}
+		}
+	}
+
 	id := getNextListingId()
 	setListingField(id, "s", caller)
 	setListingField(id, "nc", p.NftContract)
@@ -124,6 +157,9 @@ func doList(caller string, p *ListPayload) uint64 {
 	setListingUint64(id, "sb", p.StartBlock)
 	setListingField(id, "pm", p.PayoutMode)
 	setListingField(id, "pl1", p.PayoutL1Address)
+	setListingField(id, "dp", p.DexPool)
+	setListingField(id, "st", p.SettleToken)
+	setListingField(id, "mso", p.MinSettleOut)
 	// Snapshot resolved royalty splits so in-flight trades are unaffected by later split changes.
 	snapRecips, snapBps := resolveRoyaltySplits(p.NftContract)
 	snapshotRoyaltySplitsForListing(id, snapRecips, snapBps)
@@ -239,12 +275,23 @@ func doBuy(caller string, p *BuyPayload) {
 		tokenTransferBig(paymentToken, getFeeRecipient(), fee)
 	}
 	distributeRoyaltySplitsResolved(paymentToken, received, snapRecips, snapBps)
-	// F1: if payoutMode=="unmap", send seller's net to L1 via utxo unmap;
-	// otherwise use the legacy mapped-token transfer to the seller's account.
+	// Seller-leg: F1 unmap, F2 DEX-routed settlement, or legacy mapped-token transfer.
 	pm := getListingField(p.ListingId, "pm")
+	st := getListingField(p.ListingId, "st")
 	if pm == "unmap" {
 		if !mIsZero(sellerPayment) {
 			unmapTo(paymentToken, getListingField(p.ListingId, "pl1"), sellerPayment)
+		}
+	} else if st != "" {
+		if !mIsZero(sellerPayment) {
+			dexSwapTo(
+				getListingField(p.ListingId, "dp"),
+				paymentToken,
+				st,
+				seller,
+				formatMoney(sellerPayment),
+				formatMoney(parseMoney(getListingField(p.ListingId, "mso"))),
+			)
 		}
 	} else {
 		if !mIsZero(sellerPayment) {

@@ -23,6 +23,9 @@ type ListPayload struct {
 	StartBlock       uint64 `json:"startBlock"`
 	PayoutMode       string `json:"payoutMode"`       // "" | "default" | "unmap" (F1 opt-in)
 	PayoutL1Address  string `json:"payoutL1Address"`  // required when PayoutMode=="unmap"
+	DexPool          string `json:"dexPool"`          // F2: DEX pool contract id; "" = disabled
+	SettleToken      string `json:"settleToken"`      // F2: asset_out id; "" = disabled
+	MinSettleOut     string `json:"minSettleOut"`     // F2: slippage floor (decimal string)
 }
 
 type DelistPayload struct {

@@ -3046,6 +3046,12 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract37(in *jlexer.Lexer, out *ListPayl
 			out.PayoutMode = string(in.String())
 		case "payoutL1Address":
 			out.PayoutL1Address = string(in.String())
+		case "dexPool":
+			out.DexPool = string(in.String())
+		case "settleToken":
+			out.SettleToken = string(in.String())
+		case "minSettleOut":
+			out.MinSettleOut = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -3104,6 +3110,21 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract37(out *jwriter.Writer, in ListPay
 		const prefix string = ",\"payoutL1Address\":"
 		out.RawString(prefix)
 		out.String(string(in.PayoutL1Address))
+	}
+	{
+		const prefix string = ",\"dexPool\":"
+		out.RawString(prefix)
+		out.String(string(in.DexPool))
+	}
+	{
+		const prefix string = ",\"settleToken\":"
+		out.RawString(prefix)
+		out.String(string(in.SettleToken))
+	}
+	{
+		const prefix string = ",\"minSettleOut\":"
+		out.RawString(prefix)
+		out.String(string(in.MinSettleOut))
 	}
 	out.RawByte('}')
 }

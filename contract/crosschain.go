@@ -19,18 +19,17 @@ package main
 //               /mnt/HC_Volume_105012347/magi/testnet/utxo-mapping/
 //               btc-mapping-contract/contract (commit 6039c43).
 //
-// --- F2 (planned, NOT implemented here): Magi DEX router `swap` ---
+// --- F2: Magi DEX pool `swap` ---
 //
-//   Contract:   Magi DEX router (pool address for the token pair)
+//   Contract:   Magi DEX pool (address stored per-listing as `dp`)
 //   Method:     "swap"  (pool entrypoint, not a global router)
-//   Payload:    SwapParams JSON with fields including `amount_in`,
-//               `min_amount_out`, and `to` (output recipient).
-//   Semantics:  market must hold `amountIn` of fromToken; swap delivers
-//               at least `minAmountOut` of toToken to `to`; aborts if
-//               slippage floor not met.
-//   Measurement: balance-delta of toToken before/after to get actual `out`.
-//   Note:       F2 implementation is in a separate task; this file will be
-//               extended with a dexSwap helper at that time.
+//   Payload:    {"asset_in":"<pt>","amount_in":"<decimal>","asset_out":"<st>",
+//               "min_amount_out":"<mso>","to":"<seller>"}
+//   Semantics:  market calls the pool's swap with `to:seller` and
+//               `min_amount_out:<mso>`; the pool delivers `asset_out`
+//               directly to the seller and enforces slippage itself (pool
+//               aborts if output < min_amount_out → whole tx reverts).
+//               The market does NOT balance-delta-measure the output.
 // ============================================================================
 
 import (
@@ -45,5 +44,16 @@ func unmapTo(utxoContract, l1 string, amount *big.Int) {
 	payload := `{"to":"` + l1 + `","amount":"` + formatMoney(amount) + `"}`
 	if sdk.ContractCallSimple(utxoContract, "unmap", payload) == nil {
 		sdk.Abort("unmap call failed")
+	}
+}
+
+// dexSwapTo swaps `amountIn` of `assetIn` (held by THIS contract from escrow)
+// into `assetOut` via the DEX `pool` contract, delivered directly to `to`,
+// with the pool enforcing `minOut` (it aborts on slippage → whole tx
+// reverts). Aborts if the call fails. F0-verified ABI.
+func dexSwapTo(pool, assetIn, assetOut, to, amountIn, minOut string) {
+	payload := `{"asset_in":"` + assetIn + `","amount_in":"` + amountIn + `","asset_out":"` + assetOut + `","min_amount_out":"` + minOut + `","to":"` + to + `"}`
+	if sdk.ContractCallSimple(pool, "swap", payload) == nil {
+		sdk.Abort("dex swap call failed")
 	}
 }

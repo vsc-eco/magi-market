@@ -37,6 +37,13 @@ const FeeTokenID = "contract:feetoken"
 // mock has NO balanceOf entrypoint, proving the raw-read path is exercised.
 const UtxoMockID = "contract:utxomock"
 
+// DexMockID is the DEX pool mock's contract id. Used as paymentToken in F2
+// tests so that escrowIn (which calls transferFrom on the paymentToken) works
+// against dexmock's ledger, and as the DEX pool address for swap calls.
+// The mock's a-<acct> BE-u64 storage is identical to utxomock so
+// magi-market's raw-read tokenBalanceOf works for balance-delta accounting.
+const DexMockID = "contract:dexmock"
+
 const ownerAddress = "hive:tibfox"
 const feeRecipientAddress = "hive:feerecipient"
 
@@ -60,6 +67,9 @@ var FeeTokenWasm []byte
 //go:embed artifacts/utxomock.wasm
 var UtxoMockWasm []byte
 
+//go:embed artifacts/dexmock.wasm
+var DexMockWasm []byte
+
 const defaultTimestamp = "2025-09-03T00:00:00"
 
 const gas = uint(500_000_000)
@@ -73,6 +83,7 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct.RegisterContract(NftContractID, ownerAddress, NftWasm)
 	ct.RegisterContract(FeeTokenID, ownerAddress, FeeTokenWasm)
 	ct.RegisterContract(UtxoMockID, ownerAddress, UtxoMockWasm)
+	ct.RegisterContract(DexMockID, ownerAddress, DexMockWasm)
 	return &ct
 }
 
