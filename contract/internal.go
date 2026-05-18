@@ -662,7 +662,9 @@ func assertPaymentTokenAllowed(token string) {
 // contracts changes its internal key format or byte encoding, magi-market
 // will SILENTLY misread balances (a fund-safety bug, no compile error).
 // Before upgrading any of those contracts, re-verify these decoders against
-// the new source. Rationale:
+// the new source. The same hazard applies to every raw magi_nft state read
+// keyed below (bal|, op|, sb|, owner, and allow| via nftAllowanceOf) — they
+// hardcode magi_nft's internal key strings and encodings. Rationale:
 // docs/superpowers/specs/2026-05-17-magi-market-contract-compatibility-design.md
 
 // decodeTokenBig mirrors magi_token-contract bytesToBigInt (commit a819106):
@@ -735,6 +737,17 @@ func nftBalanceOf(nftContract, account, tokenId string) uint64 {
 func nftIsApprovedForAll(nftContract, account, operator string) bool {
 	v := sdk.ContractStateGet(nftContract, "op|"+account+"|"+operator)
 	return v != nil && *v == "1"
+}
+
+// nftAllowanceOf reads the per-token ERC-6909 allowance the owner granted a
+// spender on tokenId. Mirrors magi_nft allowanceKey
+// ("allow|"+owner+"|"+spender+"|"+tokenId, verified against upstream
+// feat/editioned-define-delegated-mint commit cebd5a0) whose value is
+// u64ToBytes (the same little-endian-trimmed encoding decodeNftU64 reads;
+// the key is deleted at 0, so absent => 0). This is a raw-state coupling
+// surface — see the COUPLING WARNING above the decoders.
+func nftAllowanceOf(nftContract, owner, spender, tokenId string) uint64 {
+	return decodeNftU64(sdk.ContractStateGet(nftContract, "allow|"+owner+"|"+spender+"|"+tokenId))
 }
 
 func nftIsSoulbound(nftContract, tokenId string) bool {

@@ -21,24 +21,26 @@
 //   getOwner        (ignored)                → {"owner":"<addr>"}
 //
 // State keys:
-//   owner                       stored owner address          (real: "owner")
-//   op|<owner>|<oper>           "1" if operator approved       (real: operatorKey)
-//   b|<acct>|<id>               balance (decimal string)       (mock-internal)
-//   ms|<id>                     maxSupply (decimal string)     (mock-internal)
-//   mt|<id>                     minted count (decimal string)  (mock-internal)
-//   al|<owner>|<spender>|<id>   per-token allowance (decimal)  (mock-internal)
+//   owner                          stored owner address        (real: "owner")
+//   op|<owner>|<oper>              "1" if operator approved     (real: operatorKey)
+//   allow|<owner>|<spender>|<id>   allowance, LE-u64-trimmed    (real: allowanceKey)
+//   b|<acct>|<id>                  balance (decimal string)     (mock-internal)
+//   ms|<id>                        maxSupply (decimal string)   (mock-internal)
+//   mt|<id>                        minted count (decimal)       (mock-internal)
 //
-// `owner` and `op|...` use the real key/value layout because magi-market
-// raw-reads them (nftGetOwner / nftIsApprovedForAll). The balance/supply
-// stores are mock-internal: magi-market never raw-reads them — it goes
-// through the maxSupply/balanceOf ABI, whose response NUMBER format is what
-// this mock faithfully reproduces.
+// `owner`, `op|...` and `allow|...` use the real key strings + value
+// encodings because magi-market raw-reads them (nftGetOwner /
+// nftIsApprovedForAll / nftAllowanceOf). The balance/supply stores are
+// mock-internal: magi-market never raw-reads them — it goes through the
+// maxSupply/balanceOf ABI, whose response NUMBER format is what this mock
+// faithfully reproduces.
 //
 // JSON is hand-rolled (substring scan) — NO tinyjson.
 
 package main
 
 import (
+	"encoding/binary"
 	"strconv"
 
 	"mintnftmock/sdk"
@@ -183,8 +185,55 @@ func balKey(acct, id string) string       { return "b|" + acct + "|" + id }
 func maxSupplyKey(id string) string       { return "ms|" + id }
 func mintedKey(id string) string          { return "mt|" + id }
 func operatorKey(owner, op string) string { return "op|" + owner + "|" + op }
+
+// allowanceKey / the LE-trimmed value encoding mirror the REAL magi_nft
+// allowanceKey + u64ToBytes/bytesToU64 (verified against upstream commit
+// cebd5a0). magi-market raw-reads this key via nftAllowanceOf, so the key
+// string AND byte encoding must match the real contract exactly — this is a
+// surface a mock cannot falsify.
 func allowanceKey(owner, spender, id string) string {
-	return "al|" + owner + "|" + spender + "|" + id
+	return "allow|" + owner + "|" + spender + "|" + id
+}
+
+// u64ToBytes mirrors real magi_nft u64ToBytes: little-endian, trailing zero
+// bytes trimmed, value 0 => single 0x00 byte.
+func u64ToBytes(val uint64) []byte {
+	b := make([]byte, 8)
+	binary.LittleEndian.PutUint64(b, val)
+	last := len(b) - 1
+	for last >= 0 && b[last] == 0 {
+		last--
+	}
+	if last < 0 {
+		return []byte{0}
+	}
+	return b[:last+1]
+}
+
+// bytesToU64 mirrors real magi_nft bytesToU64: little-endian, zero-padded.
+func bytesToU64(b []byte) uint64 {
+	buf := make([]byte, 8)
+	copy(buf, b)
+	return binary.LittleEndian.Uint64(buf)
+}
+
+// getAllowance / setAllowance use the real allow| key + LE-trimmed bytes,
+// deleting the key at 0 (so absent => 0) exactly like real setAllowance.
+func getAllowance(owner, spender, id string) uint64 {
+	v := sdk.StateGetObject(allowanceKey(owner, spender, id))
+	if v == nil || *v == "" {
+		return 0
+	}
+	return bytesToU64([]byte(*v))
+}
+
+func setAllowance(owner, spender, id string, amount uint64) {
+	key := allowanceKey(owner, spender, id)
+	if amount == 0 {
+		sdk.StateDeleteObject(key)
+		return
+	}
+	sdk.StateSetObject(key, string(u64ToBytes(amount)))
 }
 
 func getBalance(acct, id string) uint64 {
@@ -317,12 +366,7 @@ func Approve(payload *string) *string {
 	if err != nil {
 		sdk.Abort("invalid amount")
 	}
-	key := allowanceKey(caller, spender, id)
-	if amount == 0 {
-		sdk.StateDeleteObject(key)
-	} else {
-		setUint64State(key, amount)
-	}
+	setAllowance(caller, spender, id, amount)
 	return success()
 }
 
@@ -342,7 +386,7 @@ func Allowance(payload *string) *string {
 	if owner == "" || spender == "" || id == "" {
 		sdk.Abort("owner, spender and id required")
 	}
-	amt := getUint64State(allowanceKey(owner, spender, id))
+	amt := getAllowance(owner, spender, id)
 	r := `{"amount":` + strconv.FormatUint(amt, 10) + `}`
 	return &r
 }
@@ -384,12 +428,11 @@ func Mint(payload *string) *string {
 	opVal := sdk.StateGetObject(operatorKey(owner, caller))
 	isOperator := opVal != nil && *opVal == "1"
 	if caller != owner && !isOperator {
-		allowKey := allowanceKey(owner, caller, id)
-		allowed := getUint64State(allowKey)
+		allowed := getAllowance(owner, caller, id)
 		if allowed < amount {
 			sdk.Abort("Must be owner or approved operator to mint")
 		}
-		setUint64State(allowKey, allowed-amount)
+		setAllowance(owner, caller, id, allowed-amount)
 	}
 
 	ms := getUint64State(maxSupplyKey(id))

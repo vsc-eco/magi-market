@@ -2396,8 +2396,25 @@ func ListMintSpots(payload *string) *string {
 		sdk.Abort("Only collection owner can list mint spots")
 	}
 
-	if !nftIsApprovedForAll(nc, caller, getContractAddress()) {
-		sdk.Abort("Marketplace not approved as operator for this NFT collection")
+	// Authorization: the marketplace must be able to delegated-mint this
+	// edition. Two accepted modes (mirrors magi_nft Mint auth):
+	//   1. operator approval (setApprovalForAll) — uncapped, maxSpots may be
+	//      0 (unbounded, bounded only by the nft maxSupply).
+	//   2. per-token ERC-6909 allowance (approve) — finite and decremented
+	//      per mint by magi_nft, so the listing must declare an explicit
+	//      maxSpots in (0, allowance].
+	mkt := getContractAddress()
+	if !nftIsApprovedForAll(nc, caller, mkt) {
+		allowance := nftAllowanceOf(nc, caller, mkt, ti)
+		if allowance == 0 {
+			sdk.Abort("Marketplace not approved as operator or per-token allowance for this NFT collection")
+		}
+		if p.MaxSpots == 0 {
+			sdk.Abort("maxSpots required when listing via per-token allowance")
+		}
+		if p.MaxSpots > allowance {
+			sdk.Abort("maxSpots exceeds nft allowance")
+		}
 	}
 
 	if nftMaxSupplyOf(nc, ti) == 0 {
