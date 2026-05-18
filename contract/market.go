@@ -106,6 +106,7 @@ func doList(caller string, p *ListPayload) uint64 {
 	setListingUint64(id, "fb", currentFeeBps)
 	setListingUint64(id, "rb", currentRoyaltyBps)
 	setListingField(id, "rr", getRoyaltyRecipient(p.NftContract))
+	setListingUint64(id, "sb", p.StartBlock)
 	// Snapshot resolved royalty splits so in-flight trades are unaffected by later split changes.
 	snapRecips, snapBps := resolveRoyaltySplits(p.NftContract)
 	snapshotRoyaltySplitsForListing(id, snapRecips, snapBps)
@@ -179,6 +180,9 @@ func doBuy(caller string, p *BuyPayload) {
 	}
 	if isExpired(getListingUint64(p.ListingId, "exp")) {
 		sdk.Abort("Listing has expired")
+	}
+	if sb := getListingUint64(p.ListingId, "sb"); sb != 0 && getCurrentBlockHeight() < sb {
+		sdk.Abort("Listing not started")
 	}
 	if p.Amount == 0 {
 		sdk.Abort("Amount must be greater than zero")
@@ -1132,6 +1136,7 @@ func GetListing(payload *string) *string {
 		ExpirationBlock: getListingUint64(p.ListingId, "exp"),
 		FeeBps:          getListingUint64(p.ListingId, "fb"),
 		RoyaltyBps:      getListingUint64(p.ListingId, "rb"),
+		StartBlock:      getListingUint64(p.ListingId, "sb"),
 	})
 }
 

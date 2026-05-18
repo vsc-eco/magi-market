@@ -20,6 +20,7 @@ type ListPayload struct {
 	PaymentToken    string `json:"paymentToken"`
 	PricePerUnit    string `json:"pricePerUnit"`
 	ExpirationBlock uint64 `json:"expirationBlock"`
+	StartBlock      uint64 `json:"startBlock"`
 }
 
 type DelistPayload struct {
@@ -202,6 +203,7 @@ type ListingResponse struct {
 	ExpirationBlock uint64 `json:"expirationBlock"`
 	FeeBps          uint64 `json:"feeBps"`
 	RoyaltyBps      uint64 `json:"royaltyBps"`
+	StartBlock      uint64 `json:"startBlock"`
 }
 
 type OfferResponse struct {

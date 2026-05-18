@@ -2646,6 +2646,8 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract33(in *jlexer.Lexer, out *ListingR
 			out.FeeBps = uint64(in.Uint64())
 		case "royaltyBps":
 			out.RoyaltyBps = uint64(in.Uint64())
+		case "startBlock":
+			out.StartBlock = uint64(in.Uint64())
 		default:
 			in.SkipRecursive()
 		}
@@ -2714,6 +2716,11 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract33(out *jwriter.Writer, in Listing
 		const prefix string = ",\"royaltyBps\":"
 		out.RawString(prefix)
 		out.Uint64(uint64(in.RoyaltyBps))
+	}
+	{
+		const prefix string = ",\"startBlock\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.StartBlock))
 	}
 	out.RawByte('}')
 }
@@ -3033,6 +3040,8 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract37(in *jlexer.Lexer, out *ListPayl
 			out.PricePerUnit = string(in.String())
 		case "expirationBlock":
 			out.ExpirationBlock = uint64(in.Uint64())
+		case "startBlock":
+			out.StartBlock = uint64(in.Uint64())
 		default:
 			in.SkipRecursive()
 		}
@@ -3076,6 +3085,11 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract37(out *jwriter.Writer, in ListPay
 		const prefix string = ",\"expirationBlock\":"
 		out.RawString(prefix)
 		out.Uint64(uint64(in.ExpirationBlock))
+	}
+	{
+		const prefix string = ",\"startBlock\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.StartBlock))
 	}
 	out.RawByte('}')
 }
