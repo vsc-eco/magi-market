@@ -132,6 +132,30 @@ func emitOwnerChange(previousOwner, newOwner string) {
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
+func emitOwnerTransferInitiated(currentOwner, pendingOwner string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := OwnerTransferInitiatedEvent{
+		Type:       "ownerTransferInitiated",
+		Attributes: OwnerTransferInitiatedAttributes{CurrentOwner: currentOwner, PendingOwner: pendingOwner},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitOwnerTransferCancelled(by string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := OwnerTransferCancelledEvent{
+		Type:       "ownerTransferCancelled",
+		Attributes: OwnerTransferCancelledAttributes{By: by},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
 func emitPaused(by string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := PausedEvent{

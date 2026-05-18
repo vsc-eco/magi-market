@@ -155,7 +155,10 @@ func TestChangeOwner(t *testing.T) {
 	InitFullSetup(t, ct)
 
 	_, _, logs := CallMarket(t, ct, "changeOwner", []byte(`{"newOwner":"hive:newowner"}`), nil, ownerAddress, "", true, gas, "")
-	AssertEventEmitted(t, logs, "ownerChange")
+	AssertEventEmitted(t, logs, "ownerTransferInitiated")
+
+	_, _, logs2 := CallMarket(t, ct, "acceptOwnership", nil, nil, "hive:newowner", "", true, gas, "")
+	AssertEventEmitted(t, logs2, "ownerChange")
 
 	result, _, _ := CallMarket(t, ct, "getOwner", nil, nil, "hive:anyone", "", true, gas, "")
 	assert.Equal(t, "hive:newowner", ParseOwner(result))

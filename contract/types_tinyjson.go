@@ -6065,3 +6065,119 @@ func (v *AcceptCollectionOfferPayload) UnmarshalJSON(data []byte) error {
 func (v *AcceptCollectionOfferPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
 	tinyjsonA17a9c65DecodeTinyjsonGenContract72(l, v)
 }
+
+// ---- hand-added (sub-project A): governance structs ----
+
+func tinyjsonGovDecodePendingOwnerResponse(in *jlexer.Lexer, out *PendingOwnerResponse) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "pendingOwner":
+			out.PendingOwner = string(in.String())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func tinyjsonGovEncodePendingOwnerResponse(out *jwriter.Writer, in PendingOwnerResponse) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"pendingOwner\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.PendingOwner))
+	}
+	out.RawByte('}')
+}
+
+func (v PendingOwnerResponse) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonGovEncodePendingOwnerResponse(w, v)
+}
+func (v *PendingOwnerResponse) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonGovDecodePendingOwnerResponse(l, v)
+}
+
+func tinyjsonGovEncodeOwnerTransferInitiated(out *jwriter.Writer, in OwnerTransferInitiatedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"currentOwner\":"
+			out.RawString(p2[1:])
+			out.String(string(in.Attributes.CurrentOwner))
+		}
+		{
+			const p2 string = ",\"pendingOwner\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.PendingOwner))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v OwnerTransferInitiatedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonGovEncodeOwnerTransferInitiated(w, v)
+}
+
+func tinyjsonGovEncodeOwnerTransferCancelled(out *jwriter.Writer, in OwnerTransferCancelledEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"by\":"
+			out.RawString(p2[1:])
+			out.String(string(in.Attributes.By))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v OwnerTransferCancelledEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonGovEncodeOwnerTransferCancelled(w, v)
+}

@@ -621,9 +621,57 @@ func ChangeOwner(payload *string) *string {
 		sdk.Abort("New owner address required")
 	}
 
-	sdk.StateSetObject("owner", p.NewOwner)
-	emitOwnerChange(owner, p.NewOwner)
+	// 2-step: propose only. Ownership does not move until the proposed
+	// owner calls acceptOwnership. Re-calling overwrites the candidate.
+	setPendingOwner(p.NewOwner)
+	emitOwnerTransferInitiated(owner, p.NewOwner)
 	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport acceptOwnership
+func AcceptOwnership(payload *string) *string {
+	assertInit()
+
+	pending := getPendingOwner()
+	if pending == "" {
+		sdk.Abort("No pending ownership transfer")
+	}
+
+	caller := getCaller()
+	if caller != pending {
+		sdk.Abort("Not the pending owner")
+	}
+
+	previous, _ := getOwner()
+	sdk.StateSetObject("owner", pending)
+	clearPendingOwner()
+	emitOwnerChange(previous, pending)
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport cancelOwnershipTransfer
+func CancelOwnershipTransfer(payload *string) *string {
+	assertInit()
+
+	_, isOwner := getOwner()
+	if !isOwner {
+		sdk.Abort("Only owner can cancel ownership transfer")
+	}
+
+	if getPendingOwner() == "" {
+		sdk.Abort("No pending ownership transfer")
+	}
+
+	caller := getCaller()
+	clearPendingOwner()
+	emitOwnerTransferCancelled(caller)
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport getPendingOwner
+func GetPendingOwner(payload *string) *string {
+	assertInit()
+	return jsonResponse(&PendingOwnerResponse{PendingOwner: getPendingOwner()})
 }
 
 //go:wasmexport pause

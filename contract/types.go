@@ -72,6 +72,31 @@ type ChangeOwnerPayload struct {
 	NewOwner string `json:"newOwner"`
 }
 
+type PendingOwnerResponse struct {
+	PendingOwner string `json:"pendingOwner"`
+}
+
+type OwnerTransferInitiatedEvent struct {
+	Type       string                           `json:"type"`
+	Attributes OwnerTransferInitiatedAttributes `json:"attributes"`
+	Tx         string                           `json:"tx"`
+}
+
+type OwnerTransferInitiatedAttributes struct {
+	CurrentOwner string `json:"currentOwner"`
+	PendingOwner string `json:"pendingOwner"`
+}
+
+type OwnerTransferCancelledEvent struct {
+	Type       string                           `json:"type"`
+	Attributes OwnerTransferCancelledAttributes `json:"attributes"`
+	Tx         string                           `json:"tx"`
+}
+
+type OwnerTransferCancelledAttributes struct {
+	By string `json:"by"`
+}
+
 type ListingIdPayload struct {
 	ListingId uint64 `json:"listingId"`
 }

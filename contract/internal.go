@@ -467,6 +467,24 @@ func escrowIn(paymentToken, payer string, requested *big.Int) *big.Int {
 	return received
 }
 
+// ---- pending-owner (2-step transfer) ----
+
+func getPendingOwner() string {
+	v := sdk.StateGetObject("pending_owner")
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func setPendingOwner(addr string) {
+	sdk.StateSetObject("pending_owner", addr)
+}
+
+func clearPendingOwner() {
+	sdk.StateDeleteObject("pending_owner")
+}
+
 // big.Int variants of the token call helpers (added now, swapped in later tasks).
 func tokenTransferFromBig(tokenContract, from, to string, amount *big.Int) {
 	payload := `{"from":"` + from + `","to":"` + to + `","amount":"` + formatMoney(amount) + `"}`

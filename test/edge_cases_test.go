@@ -419,6 +419,9 @@ func TestChangeOwnerThenAdminActions(t *testing.T) {
 
 	newOwner := "hive:newowner"
 	CallMarket(t, ct, "changeOwner", []byte(fmt.Sprintf(`{"newOwner":"%s"}`, newOwner)), nil, ownerAddress, "", true, gas, "")
+	// Until accepted, the OLD owner still administers.
+	CallMarket(t, ct, "setFee", []byte(`{"feeBps":500}`), nil, ownerAddress, "", true, gas, "")
+	CallMarket(t, ct, "acceptOwnership", nil, nil, newOwner, "", true, gas, "")
 
 	// Old owner can no longer admin
 	CallMarket(t, ct, "setFee", []byte(`{"feeBps":500}`), nil, ownerAddress, "", false, gas, "Only owner can set fee")
