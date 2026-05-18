@@ -297,6 +297,101 @@ func resolveRoyaltySplits(nft string) ([]string, []uint64) {
 }
 
 // ===================================
+// Royalty Split Snapshot Helpers (B2)
+// Snapshots are stored per-entity (listing/offer/auction) at creation time so
+// later changes to collection splits do not affect in-flight trades.
+// Key scheme:
+//   ls|<id>|rs_n         / of|<id>|rs_n         / au|<id>|rs_n          = count
+//   ls|<id>|rs_<i>_r     / of|<id>|rs_<i>_r     / au|<id>|rs_<i>_r     = recipient
+//   ls|<id>|rs_<i>_b     / of|<id>|rs_<i>_b     / au|<id>|rs_<i>_b     = bps
+// ===================================
+
+func snapshotRoyaltySplitsForListing(id uint64, recips []string, bpss []uint64) {
+	n := uint64(len(recips))
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		setListingField(id, "rs_"+is+"_r", recips[i])
+		setListingUint64(id, "rs_"+is+"_b", bpss[i])
+	}
+	setListingUint64(id, "rs_n", n)
+}
+
+func loadListingRoyaltySplitSnapshot(id uint64, fallbackRecip string, fallbackBps uint64) ([]string, []uint64) {
+	n := getListingUint64(id, "rs_n")
+	if n > 0 {
+		recips := make([]string, n)
+		bpss := make([]uint64, n)
+		for i := uint64(0); i < n; i++ {
+			is := strconv.FormatUint(i, 10)
+			recips[i] = getListingField(id, "rs_"+is+"_r")
+			bpss[i] = getListingUint64(id, "rs_"+is+"_b")
+		}
+		return recips, bpss
+	}
+	// Legacy fallback: single entry from rr/rb
+	if fallbackBps > 0 && fallbackRecip != "" {
+		return []string{fallbackRecip}, []uint64{fallbackBps}
+	}
+	return []string{}, []uint64{}
+}
+
+func snapshotRoyaltySplitsForOffer(id uint64, recips []string, bpss []uint64) {
+	n := uint64(len(recips))
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		setOfferField(id, "rs_"+is+"_r", recips[i])
+		setOfferUint64(id, "rs_"+is+"_b", bpss[i])
+	}
+	setOfferUint64(id, "rs_n", n)
+}
+
+func loadOfferRoyaltySplitSnapshot(id uint64, fallbackRecip string, fallbackBps uint64) ([]string, []uint64) {
+	n := getOfferUint64(id, "rs_n")
+	if n > 0 {
+		recips := make([]string, n)
+		bpss := make([]uint64, n)
+		for i := uint64(0); i < n; i++ {
+			is := strconv.FormatUint(i, 10)
+			recips[i] = getOfferField(id, "rs_"+is+"_r")
+			bpss[i] = getOfferUint64(id, "rs_"+is+"_b")
+		}
+		return recips, bpss
+	}
+	if fallbackBps > 0 && fallbackRecip != "" {
+		return []string{fallbackRecip}, []uint64{fallbackBps}
+	}
+	return []string{}, []uint64{}
+}
+
+func snapshotRoyaltySplitsForAuction(id uint64, recips []string, bpss []uint64) {
+	n := uint64(len(recips))
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		setAuctionField(id, "rs_"+is+"_r", recips[i])
+		setAuctionUint64(id, "rs_"+is+"_b", bpss[i])
+	}
+	setAuctionUint64(id, "rs_n", n)
+}
+
+func loadAuctionRoyaltySplitSnapshot(id uint64, fallbackRecip string, fallbackBps uint64) ([]string, []uint64) {
+	n := getAuctionUint64(id, "rs_n")
+	if n > 0 {
+		recips := make([]string, n)
+		bpss := make([]uint64, n)
+		for i := uint64(0); i < n; i++ {
+			is := strconv.FormatUint(i, 10)
+			recips[i] = getAuctionField(id, "rs_"+is+"_r")
+			bpss[i] = getAuctionUint64(id, "rs_"+is+"_b")
+		}
+		return recips, bpss
+	}
+	if fallbackBps > 0 && fallbackRecip != "" {
+		return []string{fallbackRecip}, []uint64{fallbackBps}
+	}
+	return []string{}, []uint64{}
+}
+
+// ===================================
 // Min Offer Helpers
 // ===================================
 
@@ -491,6 +586,40 @@ func distributeFeesBig(totalPrice *big.Int, lockedFeeBps, lockedRoyaltyBps uint6
 	royalty := mMulBpsDiv(totalPrice, lockedRoyaltyBps)
 	sellerPayment := mSub(mSub(totalPrice, fee), royalty)
 	return fee, royalty, sellerPayment
+}
+
+// recips and bpss MUST be equal length (snapshot/resolve helpers guarantee this).
+// distributeRoyaltySplitsResolved pays each recipient their bps-fraction of total,
+// returns Σparts (the total actually paid out as royalties).
+func distributeRoyaltySplitsResolved(paymentToken string, total *big.Int, recips []string, bpss []uint64) *big.Int {
+	if len(recips) != len(bpss) {
+		sdk.Abort("royalty split slices length mismatch")
+	}
+	sum := mZero()
+	for i := range bpss {
+		part := mMulBpsDiv(total, bpss[i])
+		if !mIsZero(part) {
+			tokenTransferBig(paymentToken, recips[i], part)
+			sum = mAdd(sum, part)
+		}
+	}
+	return sum
+}
+
+// recips and bpss MUST be equal length (snapshot/resolve helpers guarantee this).
+// feeAndRoyaltyOf computes (fee, royaltyTotal, sellerPayment) from total, feeBps, and split bps slices.
+// royaltyTotal = Σ mMulBpsDiv(total, bpss[i]); sellerPayment = total - fee - royaltyTotal.
+func feeAndRoyaltyOf(total *big.Int, feeBps uint64, recips []string, bpss []uint64) (*big.Int, *big.Int, *big.Int) {
+	if len(recips) != len(bpss) {
+		sdk.Abort("royalty split slices length mismatch")
+	}
+	fee := mMulBpsDiv(total, feeBps)
+	royaltyTotal := mZero()
+	for i := range bpss {
+		royaltyTotal = mAdd(royaltyTotal, mMulBpsDiv(total, bpss[i]))
+	}
+	sellerPayment := mSub(mSub(total, fee), royaltyTotal)
+	return fee, royaltyTotal, sellerPayment
 }
 
 // ===================================

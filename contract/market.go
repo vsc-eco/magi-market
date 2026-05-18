@@ -106,6 +106,9 @@ func doList(caller string, p *ListPayload) uint64 {
 	setListingUint64(id, "fb", currentFeeBps)
 	setListingUint64(id, "rb", currentRoyaltyBps)
 	setListingField(id, "rr", getRoyaltyRecipient(p.NftContract))
+	// Snapshot resolved royalty splits so in-flight trades are unaffected by later split changes.
+	snapRecips, snapBps := resolveRoyaltySplits(p.NftContract)
+	snapshotRoyaltySplitsForListing(id, snapRecips, snapBps)
 	setNextListingId(id + 1)
 
 	emitListed(id, caller, p.NftContract, p.TokenId, p.Amount, formatMoney(price), p.PaymentToken, p.ExpirationBlock)
@@ -201,8 +204,10 @@ func doBuy(caller string, p *BuyPayload) {
 	totalCost := mMulU64(pricePerUnit, p.Amount)
 
 	received := escrowIn(paymentToken, caller, totalCost)
-	// distributeFeesBig splits the received payment into fee/royalty/seller (big.Int).
-	fee, royalty, sellerPayment := distributeFeesBig(received, lockedFeeBps, lockedRoyaltyBps)
+
+	// Load royalty split snapshot; fall back to legacy single-entry for pre-B2 in-flight entries.
+	snapRecips, snapBps := loadListingRoyaltySplitSnapshot(p.ListingId, royaltyRecipient, lockedRoyaltyBps)
+	fee, royTot, sellerPayment := feeAndRoyaltyOf(received, lockedFeeBps, snapRecips, snapBps)
 
 	// Transfer NFT from seller -> buyer using operator approval. If the seller
 	// moved/burned the NFT or revoked approval, this aborts and the whole tx
@@ -212,9 +217,7 @@ func doBuy(caller string, p *BuyPayload) {
 	if !mIsZero(fee) {
 		tokenTransferBig(paymentToken, getFeeRecipient(), fee)
 	}
-	if !mIsZero(royalty) && royaltyRecipient != "" {
-		tokenTransferBig(paymentToken, royaltyRecipient, royalty)
-	}
+	distributeRoyaltySplitsResolved(paymentToken, received, snapRecips, snapBps)
 	if !mIsZero(sellerPayment) {
 		tokenTransferBig(paymentToken, seller, sellerPayment)
 	}
@@ -225,7 +228,7 @@ func doBuy(caller string, p *BuyPayload) {
 	}
 	setListingUint64(p.ListingId, "a", newRemaining)
 
-	emitBought(p.ListingId, caller, p.Amount, formatMoney(received), formatMoney(fee), formatMoney(royalty))
+	emitBought(p.ListingId, caller, p.Amount, formatMoney(received), formatMoney(fee), formatMoney(royTot))
 }
 
 //go:wasmexport buy
@@ -359,6 +362,9 @@ func MakeOffer(payload *string) *string {
 	setOfferUint64(id, "fb", currentFeeBps)
 	setOfferUint64(id, "rb", currentRoyaltyBps)
 	setOfferField(id, "rr", getRoyaltyRecipient(p.NftContract))
+	// Snapshot resolved royalty splits so in-flight offers are unaffected by later split changes.
+	offerSnapRecips, offerSnapBps := resolveRoyaltySplits(p.NftContract)
+	snapshotRoyaltySplitsForOffer(id, offerSnapRecips, offerSnapBps)
 	if isCol {
 		setOfferField(id, "col", "1")
 	}
@@ -458,7 +464,10 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 	if mCmp(totalPrice, escrowed) > 0 {
 		sdk.Abort("Accept exceeds escrowed funds")
 	}
-	fee, royalty, sellerPayment := distributeFeesBig(totalPrice, lockedFeeBps, lockedRoyaltyBps)
+
+	// Load royalty split snapshot; fall back to legacy single-entry for pre-B2 in-flight entries.
+	offerSnapRecips, offerSnapBps := loadOfferRoyaltySplitSnapshot(offerId, royaltyRecipient, lockedRoyaltyBps)
+	fee, royTot, sellerPayment := feeAndRoyaltyOf(totalPrice, lockedFeeBps, offerSnapRecips, offerSnapBps)
 
 	nftSafeTransferFrom(nftContract, caller, buyer, tokenId, acceptAmount)
 
@@ -468,9 +477,7 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 	if !mIsZero(fee) {
 		tokenTransferBig(paymentToken, getFeeRecipient(), fee)
 	}
-	if !mIsZero(royalty) && royaltyRecipient != "" {
-		tokenTransferBig(paymentToken, royaltyRecipient, royalty)
-	}
+	distributeRoyaltySplitsResolved(paymentToken, totalPrice, offerSnapRecips, offerSnapBps)
 
 	newRemaining := safeSub(offerAmount, acceptAmount)
 	setOfferMoney(offerId, "esc", mSub(escrowed, totalPrice))
@@ -480,7 +487,7 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 		setOfferUint64(offerId, "a", newRemaining)
 	}
 
-	emitOfferAccepted(offerId, caller, buyer, acceptAmount, formatMoney(totalPrice), formatMoney(fee), formatMoney(royalty), tokenId)
+	emitOfferAccepted(offerId, caller, buyer, acceptAmount, formatMoney(totalPrice), formatMoney(fee), formatMoney(royTot), tokenId)
 }
 
 //go:wasmexport acceptOffer

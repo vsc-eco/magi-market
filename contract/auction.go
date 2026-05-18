@@ -110,6 +110,9 @@ func CreateAuction(payload *string) *string {
 	setAuctionUint64(id, "fb", currentFeeBps)
 	setAuctionUint64(id, "rb", currentRoyaltyBps)
 	setAuctionField(id, "rr", getRoyaltyRecipient(p.NftContract))
+	// Snapshot resolved royalty splits so in-flight auctions are unaffected by later split changes.
+	aucSnapRecips, aucSnapBps := resolveRoyaltySplits(p.NftContract)
+	snapshotRoyaltySplitsForAuction(id, aucSnapRecips, aucSnapBps)
 	setNextAuctionId(id + 1)
 
 	emitAuctionCreated(id, caller, p.NftContract, p.TokenId, p.Amount, p.AuctionType, formatMoney(startP), formatMoney(endP), p.StartBlock, p.EndBlock)
@@ -274,21 +277,21 @@ func PlaceBid(payload *string) *string {
 		lockedRoyaltyBps := getAuctionUint64(p.AuctionId, "rb")
 		royaltyRecipient := getAuctionField(p.AuctionId, "rr")
 
-		fee, royalty, sellerPayment := distributeFeesBig(received, lockedFeeBps, lockedRoyaltyBps)
+		// Load royalty split snapshot; fall back to legacy single-entry for pre-B2 in-flight entries.
+		dutchSnapRecips, dutchSnapBps := loadAuctionRoyaltySplitSnapshot(p.AuctionId, royaltyRecipient, lockedRoyaltyBps)
+		fee, royTot, sellerPayment := feeAndRoyaltyOf(received, lockedFeeBps, dutchSnapRecips, dutchSnapBps)
 
 		if !mIsZero(fee) {
 			feeRecipient := getFeeRecipient()
 			tokenTransferBig(paymentToken, feeRecipient, fee)
 		}
-		if !mIsZero(royalty) && royaltyRecipient != "" {
-			tokenTransferBig(paymentToken, royaltyRecipient, royalty)
-		}
+		distributeRoyaltySplitsResolved(paymentToken, received, dutchSnapRecips, dutchSnapBps)
 		if !mIsZero(sellerPayment) {
 			tokenTransferBig(paymentToken, seller, sellerPayment)
 		}
 
 		emitBidPlaced(p.AuctionId, caller, formatMoney(received))
-		emitAuctionSettled(p.AuctionId, caller, formatMoney(received), formatMoney(fee), formatMoney(royalty))
+		emitAuctionSettled(p.AuctionId, caller, formatMoney(received), formatMoney(fee), formatMoney(royTot))
 	}
 
 	return jsonResponse(&SuccessResponse{Success: true})
@@ -371,20 +374,20 @@ func SettleAuction(payload *string) *string {
 		lockedRoyaltyBps := getAuctionUint64(p.AuctionId, "rb")
 		royaltyRecipient := getAuctionField(p.AuctionId, "rr")
 
-		fee, royalty, sellerPayment := distributeFeesBig(highBid, lockedFeeBps, lockedRoyaltyBps)
+		// Load royalty split snapshot; fall back to legacy single-entry for pre-B2 in-flight entries.
+		settleSnapRecips, settleSnapBps := loadAuctionRoyaltySplitSnapshot(p.AuctionId, royaltyRecipient, lockedRoyaltyBps)
+		fee, royTot, sellerPayment := feeAndRoyaltyOf(highBid, lockedFeeBps, settleSnapRecips, settleSnapBps)
 
 		if !mIsZero(fee) {
 			feeRecipient := getFeeRecipient()
 			tokenTransferBig(paymentToken, feeRecipient, fee)
 		}
-		if !mIsZero(royalty) && royaltyRecipient != "" {
-			tokenTransferBig(paymentToken, royaltyRecipient, royalty)
-		}
+		distributeRoyaltySplitsResolved(paymentToken, highBid, settleSnapRecips, settleSnapBps)
 		if !mIsZero(sellerPayment) {
 			tokenTransferBig(paymentToken, seller, sellerPayment)
 		}
 
-		emitAuctionSettled(p.AuctionId, highBidder, formatMoney(highBid), formatMoney(fee), formatMoney(royalty))
+		emitAuctionSettled(p.AuctionId, highBidder, formatMoney(highBid), formatMoney(fee), formatMoney(royTot))
 	}
 
 	return jsonResponse(&SuccessResponse{Success: true})
