@@ -181,3 +181,42 @@ phased drops; modifying `magi_nft-contract`.
 - Supply correctness delegated to the nft contract's `maxSupply`
   enforcement (atomic-revert); the market's `maxSpots` is a soft
   listing-level cap only.
+
+### Implemented coupling surface (supersedes the earlier hedge)
+
+The edition-existence check is implemented as the **stable `maxSupply` ABI
+call** `nftMaxSupplyOf` (`ContractCallSimple(nftContract,"maxSupply",…)` →
+`{"maxSupply":"<dec>"}`), NOT a raw-state read — the safer choice; the
+earlier "raw-state getter OR ABI" wording in Section 3 is resolved to the
+ABI path. The exact coupling surface to the (still unimplemented) real
+magi_nft is therefore:
+
+1. `mint` ABI — payload `{"to","id","amount":<uint64>}`; the real nft
+   MUST `sdk.Abort` (so `ContractCallSimple` returns nil) on every failure
+   (cap exceeded / not approved / undefined). `nftDelegatedMint` treats any
+   non-nil result as success — a real nft that soft-errors with a non-nil
+   envelope instead of aborting would let the market pay out against an
+   un-minted edition.
+2. `maxSupply` ABI — response envelope EXACTLY `{"maxSupply":"<dec>"}`;
+   any other shape parses as 0 ⇒ fail-safe `"Edition not defined"` at list
+   time (no fund risk, list-only).
+3. **Raw-state keys (the one surface a mock cannot falsify):** the lister
+   gate reuses the inherited `nftGetOwner` (raw key `owner`) and
+   `nftIsApprovedForAll` (raw key `op|<owner>|<operator>`="1"). If the real
+   magi_nft stores owner/operator-approval under different keys, the mock
+   suite still passes but `listMintSpots` silently mis-authorizes.
+
+### Mandatory real-nft integration verification (production gate — not a branch blocker)
+
+Before any production reliance on mint-spot selling, once
+`feat/editioned-define-delegated-mint` is actually implemented upstream:
+(a) rebuild the harness `nft.wasm` from the implemented feature and re-run
+the mint-spot suite against the real contract; (b) **inspect the real
+magi_nft state schema** to confirm `owner` and `op|<owner>|<operator>`
+exactly match what `nftGetOwner`/`nftIsApprovedForAll` read (surface #3 —
+not covered by ABI stability, not falsifiable by the mock); (c) confirm the
+real `mint` **aborts** (not soft-errors) on every failure path (surface
+#1); (d) confirm the `maxSupply` response envelope (surface #2). Only the
+`nftDelegatedMint` wrapper + `nftMaxSupplyOf` parser change if an ABI
+drifts; a raw-state-key mismatch (surface #3) is the highest-attention
+item.
