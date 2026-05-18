@@ -7839,3 +7839,340 @@ func tinyjsonE1EncodeRentalDelistedEvent(out *jwriter.Writer, in RentalDelistedE
 func (v RentalDelistedEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonE1EncodeRentalDelistedEvent(w, v)
 }
+
+// ===================================
+// G2: Mint-Spot Primary Sale tinyjson
+// ===================================
+
+// ListMintSpotsPayload decode
+func tinyjsonG2DecodeListMintSpotsPayload(in *jlexer.Lexer, out *ListMintSpotsPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "nftContract":
+			out.NftContract = string(in.String())
+		case "tokenId":
+			out.TokenId = string(in.String())
+		case "paymentToken":
+			out.PaymentToken = string(in.String())
+		case "pricePerSpot":
+			out.PricePerSpot = string(in.String())
+		case "maxSpots":
+			out.MaxSpots = uint64(in.Uint64())
+		case "expirationBlock":
+			out.ExpirationBlock = uint64(in.Uint64())
+		case "startBlock":
+			out.StartBlock = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *ListMintSpotsPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonG2DecodeListMintSpotsPayload(l, v)
+}
+
+// BuyMintSpotPayload decode
+func tinyjsonG2DecodeBuyMintSpotPayload(in *jlexer.Lexer, out *BuyMintSpotPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "listingId":
+			out.ListingId = uint64(in.Uint64())
+		case "amount":
+			out.Amount = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *BuyMintSpotPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonG2DecodeBuyMintSpotPayload(l, v)
+}
+
+// MintSpotIdPayload decode
+func tinyjsonG2DecodeMintSpotIdPayload(in *jlexer.Lexer, out *MintSpotIdPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "listingId":
+			out.ListingId = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *MintSpotIdPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonG2DecodeMintSpotIdPayload(l, v)
+}
+
+// MintSpotListingResponse encode
+func tinyjsonG2EncodeMintSpotListingResponse(out *jwriter.Writer, in MintSpotListingResponse) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"listingId\":"
+		out.RawString(prefix[1:])
+		out.Uint64(uint64(in.ListingId))
+	}
+	{
+		const prefix string = ",\"lister\":"
+		out.RawString(prefix)
+		out.String(string(in.Lister))
+	}
+	{
+		const prefix string = ",\"nftContract\":"
+		out.RawString(prefix)
+		out.String(string(in.NftContract))
+	}
+	{
+		const prefix string = ",\"tokenId\":"
+		out.RawString(prefix)
+		out.String(string(in.TokenId))
+	}
+	{
+		const prefix string = ",\"paymentToken\":"
+		out.RawString(prefix)
+		out.String(string(in.PaymentToken))
+	}
+	{
+		const prefix string = ",\"pricePerSpot\":"
+		out.RawString(prefix)
+		out.String(string(in.PricePerSpot))
+	}
+	{
+		const prefix string = ",\"maxSpots\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.MaxSpots))
+	}
+	{
+		const prefix string = ",\"sold\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.Sold))
+	}
+	{
+		const prefix string = ",\"active\":"
+		out.RawString(prefix)
+		out.Bool(bool(in.Active))
+	}
+	{
+		const prefix string = ",\"expirationBlock\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.ExpirationBlock))
+	}
+	{
+		const prefix string = ",\"startBlock\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.StartBlock))
+	}
+	{
+		const prefix string = ",\"feeBps\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.FeeBps))
+	}
+	out.RawByte('}')
+}
+
+func (v MintSpotListingResponse) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonG2EncodeMintSpotListingResponse(w, v)
+}
+
+// MintSpotsListedEvent encode
+func tinyjsonG2EncodeMintSpotsListedEvent(out *jwriter.Writer, in MintSpotsListedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"listingId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.ListingId))
+		}
+		{
+			const p2 string = ",\"lister\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Lister))
+		}
+		{
+			const p2 string = ",\"nftContract\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.NftContract))
+		}
+		{
+			const p2 string = ",\"tokenId\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.TokenId))
+		}
+		{
+			const p2 string = ",\"maxSpots\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.MaxSpots))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v MintSpotsListedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonG2EncodeMintSpotsListedEvent(w, v)
+}
+
+// MintSpotBoughtEvent encode
+func tinyjsonG2EncodeMintSpotBoughtEvent(out *jwriter.Writer, in MintSpotBoughtEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"listingId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.ListingId))
+		}
+		{
+			const p2 string = ",\"buyer\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Buyer))
+		}
+		{
+			const p2 string = ",\"amount\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Amount))
+		}
+		{
+			const p2 string = ",\"received\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Received))
+		}
+		{
+			const p2 string = ",\"fee\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Fee))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v MintSpotBoughtEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonG2EncodeMintSpotBoughtEvent(w, v)
+}
+
+// MintSpotsDelistedEvent encode
+func tinyjsonG2EncodeMintSpotsDelistedEvent(out *jwriter.Writer, in MintSpotsDelistedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"listingId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.ListingId))
+		}
+		{
+			const p2 string = ",\"lister\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Lister))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v MintSpotsDelistedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonG2EncodeMintSpotsDelistedEvent(w, v)
+}

@@ -419,6 +419,52 @@ func emitSwapCancelled(swapId uint64, by string) {
 }
 
 // ===================================
+// G2: Mint-Spot Events
+// ===================================
+
+func emitMintSpotsListed(listingId uint64, lister, nftContract, tokenId string, maxSpots uint64) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := MintSpotsListedEvent{
+		Type: "mint_spots_listed",
+		Attributes: MintSpotsListedAttributes{
+			ListingId: listingId, Lister: lister, NftContract: nftContract,
+			TokenId: tokenId, MaxSpots: maxSpots,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitMintSpotBought(listingId uint64, buyer string, amount uint64, received, fee string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := MintSpotBoughtEvent{
+		Type: "mint_spot_bought",
+		Attributes: MintSpotBoughtAttributes{
+			ListingId: listingId, Buyer: buyer, Amount: amount,
+			Received: received, Fee: fee,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitMintSpotsDelisted(listingId uint64, lister string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := MintSpotsDelistedEvent{
+		Type:       "mint_spots_delisted",
+		Attributes: MintSpotsDelistedAttributes{ListingId: listingId, Lister: lister},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+// ===================================
 // E1: NFT Rental Events
 // ===================================
 

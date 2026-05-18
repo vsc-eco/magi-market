@@ -2346,3 +2346,232 @@ func GetActiveRentalOf(payload *string) *string {
 	return jsonResponse(&ActiveRentalResponse{Active: false, Until: 0})
 }
 
+// ===================================
+// G2: Mint-Spot Primary Sale Entrypoints
+// ===================================
+
+//go:wasmexport listMintSpots
+func ListMintSpots(payload *string) *string {
+	assertInit()
+	assertNotPaused()
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p ListMintSpotsPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	nc := p.NftContract
+	ti := p.TokenId
+	pt := p.PaymentToken
+	if nc == "" || ti == "" || pt == "" {
+		sdk.Abort("NFT contract, token ID, and payment token required")
+	}
+
+	price := parseMoney(p.PricePerSpot)
+	if mIsZero(price) {
+		sdk.Abort("Price must be greater than zero")
+	}
+
+	assertPaymentTokenAllowed(pt)
+	assertCollectionAllowed(nc)
+
+	// F1/F2 allowlist: tokenId is concatenated into the delegated-mint JSON payload.
+	for i := 0; i < len(ti); i++ {
+		c := ti[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == ':' || c == '-') {
+			sdk.Abort("tokenId contains invalid characters")
+		}
+	}
+
+	if nftGetOwner(nc) != caller {
+		sdk.Abort("Only collection owner can list mint spots")
+	}
+
+	if !nftIsApprovedForAll(nc, caller, getContractAddress()) {
+		sdk.Abort("Marketplace not approved as operator for this NFT collection")
+	}
+
+	if nftMaxSupplyOf(nc, ti) == 0 {
+		sdk.Abort("Edition not defined")
+	}
+
+	feeBps := getEffectiveFeeBps(nc)
+	if feeBps > 10000 {
+		sdk.Abort("Fee must be <= 10000 basis points")
+	}
+
+	id := getNextMintSpotId()
+	setMintSpotField(id, "s", caller)
+	setMintSpotField(id, "nc", nc)
+	setMintSpotField(id, "ti", ti)
+	setMintSpotField(id, "pt", pt)
+	setMintSpotMoney(id, "p", price)
+	setMintSpotUint64(id, "ms", p.MaxSpots)
+	setMintSpotUint64(id, "sold", 0)
+	setMintSpotField(id, "act", "1")
+	setMintSpotUint64(id, "exp", p.ExpirationBlock)
+	setMintSpotUint64(id, "sb", p.StartBlock)
+	setMintSpotUint64(id, "fb", feeBps)
+	setNextMintSpotId(id + 1)
+
+	emitMintSpotsListed(id, caller, nc, ti, p.MaxSpots)
+	return jsonResponse(&CreatedResponse{Success: true, Id: id})
+}
+
+//go:wasmexport buyMintSpot
+func BuyMintSpot(payload *string) *string {
+	assertInit()
+	assertNotPaused()
+
+	buyer := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p BuyMintSpotPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	id := p.ListingId
+
+	if !isMintSpotActive(id) {
+		sdk.Abort("Mint spot listing not active")
+	}
+	if isExpired(getMintSpotUint64(id, "exp")) {
+		sdk.Abort("Mint spot listing has expired")
+	}
+	if sb := getMintSpotUint64(id, "sb"); sb != 0 && getCurrentBlockHeight() < sb {
+		sdk.Abort("Listing not started")
+	}
+
+	nc := getMintSpotField(id, "nc")
+	assertCollectionAllowed(nc)
+
+	if p.Amount == 0 {
+		sdk.Abort("Amount must be greater than zero")
+	}
+
+	lister := getMintSpotField(id, "s")
+	if buyer == lister {
+		sdk.Abort("Lister cannot buy own mint spots")
+	}
+
+	ms := getMintSpotUint64(id, "ms")
+	sold := getMintSpotUint64(id, "sold")
+	if ms != 0 && sold+p.Amount > ms {
+		sdk.Abort("Exceeds listing mint-spot cap")
+	}
+
+	pt := getMintSpotField(id, "pt")
+	price := getMintSpotMoney(id, "p")
+	total := mMulU64(price, p.Amount)
+
+	received := escrowIn(pt, buyer, total)
+	fee, _, creatorPay := feeAndRoyaltyOf(received, getMintSpotUint64(id, "fb"), nil, nil)
+
+	// Delegated mint BEFORE payouts: if the nft aborts (maxSupply exceeded,
+	// auth revoked, etc.) the whole tx reverts including the escrow leg —
+	// buyer is fully refunded. Mirrors doBuy's NFT-before-payout ordering.
+	ti := getMintSpotField(id, "ti")
+	nftDelegatedMint(nc, buyer, ti, p.Amount)
+
+	if !mIsZero(fee) {
+		tokenTransferBig(pt, getFeeRecipient(), fee)
+	}
+	if !mIsZero(creatorPay) {
+		tokenTransferBig(pt, lister, creatorPay)
+	}
+
+	newSold := sold + p.Amount
+	setMintSpotUint64(id, "sold", newSold)
+	if ms != 0 && newSold == ms {
+		setMintSpotField(id, "act", "0")
+	}
+
+	emitMintSpotBought(id, buyer, p.Amount, formatMoney(received), formatMoney(fee))
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport delistMintSpots
+func DelistMintSpots(payload *string) *string {
+	assertInit()
+	// Intentionally allowed while paused (recovery path, mirrors Delist).
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p MintSpotIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	id := p.ListingId
+	if !isMintSpotActive(id) {
+		sdk.Abort("Mint spot listing not active")
+	}
+
+	lister := getMintSpotField(id, "s")
+	if caller != lister {
+		sdk.Abort("Only lister can delist mint spots")
+	}
+
+	setMintSpotField(id, "act", "0")
+	emitMintSpotsDelisted(id, lister)
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport getMintSpotListing
+func GetMintSpotListing(payload *string) *string {
+	assertInit()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p MintSpotIdPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	id := p.ListingId
+	lister := getMintSpotField(id, "s")
+	if lister == "" {
+		sdk.Abort("Mint spot listing not found")
+	}
+
+	return jsonResponse(&MintSpotListingResponse{
+		ListingId:       id,
+		Lister:          lister,
+		NftContract:     getMintSpotField(id, "nc"),
+		TokenId:         getMintSpotField(id, "ti"),
+		PaymentToken:    getMintSpotField(id, "pt"),
+		PricePerSpot:    formatMoney(getMintSpotMoney(id, "p")),
+		MaxSpots:        getMintSpotUint64(id, "ms"),
+		Sold:            getMintSpotUint64(id, "sold"),
+		Active:          isMintSpotActive(id),
+		ExpirationBlock: getMintSpotUint64(id, "exp"),
+		StartBlock:      getMintSpotUint64(id, "sb"),
+		FeeBps:          getMintSpotUint64(id, "fb"),
+	})
+}
+

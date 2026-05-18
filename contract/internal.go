@@ -865,6 +865,90 @@ func assertCollectionAllowed(nftContract string) {
 	}
 }
 
+// ===================================
+// G2: Mint-Spot State Helpers
+// ===================================
+
+func mintSpotKey(id uint64, field string) string {
+	return "msp|" + strconv.FormatUint(id, 10) + "|" + field
+}
+
+func setMintSpotField(id uint64, field, value string) {
+	sdk.StateSetObject(mintSpotKey(id, field), value)
+}
+
+func getMintSpotField(id uint64, field string) string {
+	return getStringState(mintSpotKey(id, field))
+}
+
+func getMintSpotUint64(id uint64, field string) uint64 {
+	return getUint64State(mintSpotKey(id, field))
+}
+
+func setMintSpotUint64(id uint64, field string, val uint64) {
+	setUint64State(mintSpotKey(id, field), val)
+}
+
+func setMintSpotMoney(id uint64, field string, v *big.Int) {
+	setMoneyState(mintSpotKey(id, field), v)
+}
+
+func getMintSpotMoney(id uint64, field string) *big.Int {
+	return getMoneyState(mintSpotKey(id, field))
+}
+
+func isMintSpotActive(id uint64) bool {
+	return getMintSpotField(id, "act") == "1"
+}
+
+func getNextMintSpotId() uint64 {
+	return getUint64State("nxt_msp")
+}
+
+func setNextMintSpotId(id uint64) {
+	setUint64State("nxt_msp", id)
+}
+
+// nftMaxSupplyOf calls the nft `maxSupply` ABI for tokenId, returning 0 if
+// absent/nil/non-numeric. PRECONDITION: callers must have validated tokenId
+// against the [a-zA-Z0-9:-] allowlist before passing it here (it is
+// concatenated into the call payload). listMintSpots enforces this.
+//
+// The nft contract returns {"maxSupply":"<dec>"}. Returns 0 if nil or unparseable.
+// This is a stable-ABI call (not internal-state read) per spec Section 3.
+func nftMaxSupplyOf(nftContract, tokenId string) uint64 {
+	payload := `{"id":"` + tokenId + `"}`
+	result := sdk.ContractCallSimple(nftContract, "maxSupply", payload)
+	if result == nil || *result == "" {
+		return 0
+	}
+	// Parse {"maxSupply":"<dec>"} — find the value after "maxSupply":"
+	s := *result
+	key := `"maxSupply":"`
+	idx := -1
+	for i := 0; i+len(key) <= len(s); i++ {
+		if s[i:i+len(key)] == key {
+			idx = i + len(key)
+			break
+		}
+	}
+	if idx < 0 {
+		return 0
+	}
+	end := idx
+	for end < len(s) && s[end] != '"' {
+		end++
+	}
+	if end <= idx {
+		return 0
+	}
+	val, err := strconv.ParseUint(s[idx:end], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return val
+}
+
 // ---- pending-owner (2-step transfer) ----
 
 func getPendingOwner() string {

@@ -861,3 +861,80 @@ type RentalDelistedAttributes struct {
 	RentalId uint64 `json:"rentalId"`
 	Owner    string `json:"owner"`
 }
+
+// ===================================
+// G2: Mint-Spot Primary Sale Types
+// ===================================
+
+type ListMintSpotsPayload struct {
+	NftContract     string `json:"nftContract"`
+	TokenId         string `json:"tokenId"`
+	PaymentToken    string `json:"paymentToken"`
+	PricePerSpot    string `json:"pricePerSpot"`
+	MaxSpots        uint64 `json:"maxSpots"`
+	ExpirationBlock uint64 `json:"expirationBlock"`
+	StartBlock      uint64 `json:"startBlock"`
+}
+
+type BuyMintSpotPayload struct {
+	ListingId uint64 `json:"listingId"`
+	Amount    uint64 `json:"amount"`
+}
+
+type MintSpotIdPayload struct {
+	ListingId uint64 `json:"listingId"`
+}
+
+type MintSpotListingResponse struct {
+	ListingId       uint64 `json:"listingId"`
+	Lister          string `json:"lister"`
+	NftContract     string `json:"nftContract"`
+	TokenId         string `json:"tokenId"`
+	PaymentToken    string `json:"paymentToken"`
+	PricePerSpot    string `json:"pricePerSpot"`
+	MaxSpots        uint64 `json:"maxSpots"`
+	Sold            uint64 `json:"sold"`
+	Active          bool   `json:"active"`
+	ExpirationBlock uint64 `json:"expirationBlock"`
+	StartBlock      uint64 `json:"startBlock"`
+	FeeBps          uint64 `json:"feeBps"`
+}
+
+type MintSpotsListedEvent struct {
+	Type       string                      `json:"type"`
+	Attributes MintSpotsListedAttributes   `json:"attributes"`
+	Tx         string                      `json:"tx"`
+}
+
+type MintSpotsListedAttributes struct {
+	ListingId   uint64 `json:"listingId"`
+	Lister      string `json:"lister"`
+	NftContract string `json:"nftContract"`
+	TokenId     string `json:"tokenId"`
+	MaxSpots    uint64 `json:"maxSpots"`
+}
+
+type MintSpotBoughtEvent struct {
+	Type       string                   `json:"type"`
+	Attributes MintSpotBoughtAttributes `json:"attributes"`
+	Tx         string                   `json:"tx"`
+}
+
+type MintSpotBoughtAttributes struct {
+	ListingId uint64 `json:"listingId"`
+	Buyer     string `json:"buyer"`
+	Amount    uint64 `json:"amount"`
+	Received  string `json:"received"`
+	Fee       string `json:"fee"`
+}
+
+type MintSpotsDelistedEvent struct {
+	Type       string                        `json:"type"`
+	Attributes MintSpotsDelistedAttributes   `json:"attributes"`
+	Tx         string                        `json:"tx"`
+}
+
+type MintSpotsDelistedAttributes struct {
+	ListingId uint64 `json:"listingId"`
+	Lister    string `json:"lister"`
+}
