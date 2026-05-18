@@ -176,6 +176,84 @@ func TestOfferAcceptRoyaltySplits(t *testing.T) {
 	AssertEventContains(t, logs, "offer_accepted", fmt.Sprintf(`"royalty":"%d"`, expectedRa+expectedRb))
 }
 
+// ===================================
+// B3: Per-Collection Fee Override Tests
+// ===================================
+
+type EffectiveFeeResult struct {
+	FeeBps uint64 `json:"feeBps"`
+}
+
+func ParseEffectiveFee(ret string) EffectiveFeeResult {
+	var resp EffectiveFeeResult
+	json.Unmarshal([]byte(ret), &resp)
+	return resp
+}
+
+func TestPerCollectionFeeOverride(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+	// Global fee is 250 bps (from InitMarket). Set a per-collection override of 100 bps.
+
+	// --- owner sets collection fee override ---
+	setFeePayload := fmt.Sprintf(`{"nftContract":"%s","feeBps":100}`, NftContractID)
+	CallMarket(t, ct, "setCollectionFee", []byte(setFeePayload), nil, ownerAddress, "", true, gas, "")
+
+	// getEffectiveFee should return 100 (override)
+	getResult, _, _ := CallMarket(t, ct, "getEffectiveFee", []byte(fmt.Sprintf(`{"nftContract":"%s"}`, NftContractID)), nil, "hive:anyone", "", true, gas, "")
+	assert.Equal(t, uint64(100), ParseEffectiveFee(getResult.Ret).FeeBps, "effective fee should be override 100")
+
+	// --- list + buy with override fee ---
+	MintNft(t, ct, ownerAddress, "1", 1, 1)
+	ApproveNftForMarket(t, ct, ownerAddress)
+	const total = uint64(10000)
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","pricePerUnit":"%d"}`, NftContractID, TokenID, total)
+	CallMarket(t, ct, "list", []byte(listPayload), nil, ownerAddress, "", true, gas, "")
+
+	buyer := "hive:buyer_b3"
+	MintAndApproveToken(t, ct, buyer, total)
+	CallMarket(t, ct, "buy", []byte(`{"listingId":0,"amount":1}`), nil, buyer, "", true, gas, "")
+
+	// Fee should be 100 bps of 10000 = 100 (not global 250 bps = 250)
+	expectedFee := testMulBpsDiv(total, 100)    // 100
+	expectedSeller := total - expectedFee       // 9900 (no royalty configured)
+	assert.Equal(t, expectedFee, QueryTokenBalance(t, ct, feeRecipientAddress), "fee with override")
+	assert.Equal(t, expectedSeller, QueryTokenBalance(t, ct, ownerAddress), "seller with override fee")
+	assert.Equal(t, uint64(0), QueryTokenBalance(t, ct, MarketContractAddress), "market residual zero")
+
+	// --- clear override; list + buy again → reverts to global (250 bps) ---
+	clearPayload := fmt.Sprintf(`{"nftContract":"%s"}`, NftContractID)
+	CallMarket(t, ct, "clearCollectionFee", []byte(clearPayload), nil, ownerAddress, "", true, gas, "")
+
+	// getEffectiveFee should now return global 250
+	getResult2, _, _ := CallMarket(t, ct, "getEffectiveFee", []byte(fmt.Sprintf(`{"nftContract":"%s"}`, NftContractID)), nil, "hive:anyone", "", true, gas, "")
+	assert.Equal(t, uint64(250), ParseEffectiveFee(getResult2.Ret).FeeBps, "effective fee after clear should be global 250")
+
+	// List a second item and buy it
+	MintNft(t, ct, ownerAddress, "2", 1, 1)
+	listPayload2 := fmt.Sprintf(`{"nftContract":"%s","tokenId":"2","amount":1,"paymentToken":"%s","pricePerUnit":"%d"}`, NftContractID, TokenID, total)
+	CallMarket(t, ct, "list", []byte(listPayload2), nil, ownerAddress, "", true, gas, "")
+
+	buyer2 := "hive:buyer_b3b"
+	MintAndApproveToken(t, ct, buyer2, total)
+	CallMarket(t, ct, "buy", []byte(`{"listingId":1,"amount":1}`), nil, buyer2, "", true, gas, "")
+
+	// Fee for second buy should be global 250 bps = 250
+	expectedFee2 := testMulBpsDiv(total, 250) // 250
+	// Total feeRecipient balance is 100 (from first buy) + 250 (from second buy) = 350
+	assert.Equal(t, expectedFee+expectedFee2, QueryTokenBalance(t, ct, feeRecipientAddress), "fee reverted to global after clear")
+
+	// --- non-owner setCollectionFee rejected ---
+	CallMarket(t, ct, "setCollectionFee", []byte(setFeePayload), nil, "hive:notowner", "", false, gas, "Only owner can set collection fee")
+
+	// --- FeeBps > 10000 rejected ---
+	badFeePayload := fmt.Sprintf(`{"nftContract":"%s","feeBps":10001}`, NftContractID)
+	CallMarket(t, ct, "setCollectionFee", []byte(badFeePayload), nil, ownerAddress, "", false, gas, "Fee must be <= 10000 basis points")
+
+	// --- non-owner clearCollectionFee rejected ---
+	CallMarket(t, ct, "clearCollectionFee", []byte(clearPayload), nil, "hive:notowner", "", false, gas, "Only owner can set collection fee")
+}
+
 // TestAuctionSettleRoyaltySplits: same split config via English createAuction->placeBid->advance->settleAuction.
 func TestAuctionSettleRoyaltySplits(t *testing.T) {
 	ct := SetupContractTest()

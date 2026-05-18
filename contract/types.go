@@ -559,3 +559,37 @@ type RoyaltySplitsSetAttributes struct {
 	NftContract string `json:"nftContract"`
 	Count       uint64 `json:"count"`
 }
+
+// ===================================
+// B3: Per-Collection Fee Override Types
+// ===================================
+
+type CollectionFeePayload struct {
+	NftContract string `json:"nftContract"`
+	FeeBps      uint64 `json:"feeBps"`
+}
+
+type EffectiveFeeResponse struct {
+	FeeBps uint64 `json:"feeBps"`
+}
+
+type CollectionFeeSetEvent struct {
+	Type       string                       `json:"type"`
+	Attributes CollectionFeeSetAttributes   `json:"attributes"`
+	Tx         string                       `json:"tx"`
+}
+
+type CollectionFeeSetAttributes struct {
+	NftContract string `json:"nftContract"`
+	FeeBps      uint64 `json:"feeBps"`
+}
+
+type CollectionFeeClearedEvent struct {
+	Type       string                          `json:"type"`
+	Attributes CollectionFeeClearedAttributes  `json:"attributes"`
+	Tx         string                          `json:"tx"`
+}
+
+type CollectionFeeClearedAttributes struct {
+	NftContract string `json:"nftContract"`
+}

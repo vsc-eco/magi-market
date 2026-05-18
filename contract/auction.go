@@ -83,7 +83,7 @@ func CreateAuction(payload *string) *string {
 	assertCollectionAllowed(p.NftContract)
 
 	// Lock current fees and royalties
-	currentFeeBps := getFeeBps()
+	currentFeeBps := getEffectiveFeeBps(p.NftContract)
 	currentRoyaltyBps := getRoyaltyBps(p.NftContract)
 	if currentFeeBps+currentRoyaltyBps > 10000 {
 		sdk.Abort("Combined fee and royalty exceed 100%")

@@ -297,3 +297,27 @@ func emitRoyaltySplitsSet(nftContract string, count uint64) {
 	event.MarshalTinyJSON(&w)
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
+
+func emitCollectionFeeSet(nftContract string, feeBps uint64) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := CollectionFeeSetEvent{
+		Type:       "collectionFeeSet",
+		Attributes: CollectionFeeSetAttributes{NftContract: nftContract, FeeBps: feeBps},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitCollectionFeeCleared(nftContract string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := CollectionFeeClearedEvent{
+		Type:       "collectionFeeCleared",
+		Attributes: CollectionFeeClearedAttributes{NftContract: nftContract},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}

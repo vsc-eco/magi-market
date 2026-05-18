@@ -80,7 +80,7 @@ func doList(caller string, p *ListPayload) uint64 {
 	}
 	assertCollectionAllowed(p.NftContract)
 
-	currentFeeBps := getFeeBps()
+	currentFeeBps := getEffectiveFeeBps(p.NftContract)
 	currentRoyaltyBps := getRoyaltyBps(p.NftContract)
 	if currentFeeBps+currentRoyaltyBps > 10000 {
 		sdk.Abort("Combined fee and royalty exceed 100%")
@@ -336,7 +336,7 @@ func MakeOffer(payload *string) *string {
 		sdk.Abort("Offer below minimum threshold")
 	}
 
-	currentFeeBps := getFeeBps()
+	currentFeeBps := getEffectiveFeeBps(p.NftContract)
 	currentRoyaltyBps := getRoyaltyBps(p.NftContract)
 	if currentFeeBps+currentRoyaltyBps > 10000 {
 		sdk.Abort("Combined fee and royalty exceed 100%")
@@ -1316,5 +1316,85 @@ func IsCollectionDenied(payload *string) *string {
 	}
 
 	return jsonResponse(&CollectionDeniedResponse{Denied: isCollectionDenied(p.NftContract)})
+}
+
+// ===================================
+// B3: Per-Collection Fee Override Functions
+// ===================================
+
+//go:wasmexport setCollectionFee
+func SetCollectionFee(payload *string) *string {
+	assertInit()
+
+	_, isOwner := getOwner()
+	if !isOwner {
+		sdk.Abort("Only owner can set collection fee")
+	}
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+	var p CollectionFeePayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if p.NftContract == "" {
+		sdk.Abort("NFT contract required")
+	}
+	if p.FeeBps > 10000 {
+		sdk.Abort("Fee must be <= 10000 basis points")
+	}
+
+	setCollectionFeeState(p.NftContract, p.FeeBps)
+	emitCollectionFeeSet(p.NftContract, p.FeeBps)
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport clearCollectionFee
+func ClearCollectionFee(payload *string) *string {
+	assertInit()
+
+	_, isOwner := getOwner()
+	if !isOwner {
+		sdk.Abort("Only owner can set collection fee")
+	}
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+	var p CollectionPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	if p.NftContract == "" {
+		sdk.Abort("NFT contract required")
+	}
+
+	clearCollectionFeeState(p.NftContract)
+	emitCollectionFeeCleared(p.NftContract)
+	return jsonResponse(&SuccessResponse{Success: true})
+}
+
+//go:wasmexport getEffectiveFee
+func GetEffectiveFee(payload *string) *string {
+	assertInit()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+	var p CollectionPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	return jsonResponse(&EffectiveFeeResponse{FeeBps: getEffectiveFeeBps(p.NftContract)})
 }
 

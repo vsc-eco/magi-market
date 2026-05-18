@@ -221,6 +221,31 @@ func getFeeRecipient() string {
 	return getStringState("fee_rcpt")
 }
 
+// ---- Per-collection fee override helpers (B3) ----
+
+func collectionFeeKey(nftContract string) string {
+	return "cfee|" + nftContract
+}
+
+func setCollectionFeeState(nftContract string, bps uint64) {
+	setStringState(collectionFeeKey(nftContract), strconv.FormatUint(bps, 10))
+}
+
+func clearCollectionFeeState(nftContract string) {
+	sdk.StateDeleteObject(collectionFeeKey(nftContract))
+}
+
+// getEffectiveFeeBps returns the per-collection override bps if set, else the global fee bps.
+// Absent override ⇒ identical to getFeeBps() — the key regression guarantee.
+func getEffectiveFeeBps(nftContract string) uint64 {
+	v := sdk.StateGetObject(collectionFeeKey(nftContract))
+	if v == nil || *v == "" {
+		return getFeeBps()
+	}
+	bps, _ := strconv.ParseUint(*v, 10, 64)
+	return bps
+}
+
 // ===================================
 // Royalty Helpers
 // ===================================

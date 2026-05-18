@@ -6490,3 +6490,126 @@ func tinyjsonB1EncodeRoyaltySplitsSetEvent(out *jwriter.Writer, in RoyaltySplits
 func (v RoyaltySplitsSetEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonB1EncodeRoyaltySplitsSetEvent(w, v)
 }
+
+// ---- hand-added (sub-project B3): per-collection fee override structs ----
+
+// CollectionFeePayload decode (input: nftContract + feeBps — mirrors CollectionPayload + adds uint64 feeBps)
+func tinyjsonB3DecodeCollectionFeePayload(in *jlexer.Lexer, out *CollectionFeePayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "nftContract":
+			out.NftContract = string(in.String())
+		case "feeBps":
+			out.FeeBps = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *CollectionFeePayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonB3DecodeCollectionFeePayload(l, v)
+}
+
+// EffectiveFeeResponse encode (output: feeBps uint64)
+func tinyjsonB3EncodeEffectiveFeeResponse(out *jwriter.Writer, in EffectiveFeeResponse) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"feeBps\":"
+		out.RawString(prefix[1:])
+		out.Uint64(uint64(in.FeeBps))
+	}
+	out.RawByte('}')
+}
+
+func (v EffectiveFeeResponse) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonB3EncodeEffectiveFeeResponse(w, v)
+}
+
+// CollectionFeeSetEvent encode (mirrors tinyjsonGovEncodeCollectionDenied + uint64 feeBps attribute)
+func tinyjsonB3EncodeCollectionFeeSetEvent(out *jwriter.Writer, in CollectionFeeSetEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"nftContract\":"
+			out.RawString(p2[1:])
+			out.String(string(in.Attributes.NftContract))
+		}
+		{
+			const p2 string = ",\"feeBps\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.FeeBps))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v CollectionFeeSetEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonB3EncodeCollectionFeeSetEvent(w, v)
+}
+
+// CollectionFeeClearedEvent encode (mirrors tinyjsonGovEncodeCollectionDenied — single nftContract attribute)
+func tinyjsonB3EncodeCollectionFeeClearedEvent(out *jwriter.Writer, in CollectionFeeClearedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"nftContract\":"
+			out.RawString(p2[1:])
+			out.String(string(in.Attributes.NftContract))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v CollectionFeeClearedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonB3EncodeCollectionFeeClearedEvent(w, v)
+}
