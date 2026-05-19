@@ -5,13 +5,18 @@
 //     identical to utxo-mapping/utxomock) so magi-market's raw-read
 //     tokenBalanceOf path works for escrowIn.
 //   - Supports the magi-market escrowIn path via transferFrom + transfer.
-//   - Implements the F0-verified DEX swap ABI:
+//   - Implements the DEX swap ABI verified against testnet dex-contracts
+//     contracts/dex/main.go + contracts/asset/asset.go @ 09af7ee:
 //       swap {"asset_in":"<id>","amount_in":"<dec>","asset_out":"<id>",
-//             "min_amount_out":"<dec>","to":"<recipient>"}
-//     The mock debits the CALLER's a-<caller> balance by amount_in,
-//     applies a fixed 5% mock spread (out = amount_in * 95 / 100),
-//     aborts "slippage tolerance exceeded" if out < min_amount_out,
-//     and credits a-<to> by out. Returns bare "0".
+//             "min_amount_out":"<dec>","from":"<caller>","to":"<recipient>"}
+//     `from` is MANDATORY and must equal the caller — the real pool aborts
+//     if VerifyAddress(from)=="unknown" and DrawAssetFrom enforces
+//     from==caller (no allowance pull). This mock enforces the same
+//     invariant so a missing/mismatched `from` cannot be masked. The mock
+//     then debits the caller's a-<caller> balance by amount_in, applies a
+//     fixed 5% mock spread (out = amount_in * 95 / 100), aborts "slippage
+//     tolerance exceeded" if out < min_amount_out, and credits a-<to> by
+//     out. Returns bare "0".
 //   - TEST-ONLY "bal {account}" query → {"balance":"<dec>"} (NOT named
 //     balanceOf, so magi-market never calls it directly).
 //
@@ -227,8 +232,19 @@ func Swap(payload *string) *string {
 	amountInStr := jsonStringField(p, "amount_in")
 	minAmountOutStr := jsonStringField(p, "min_amount_out")
 	toAddr := jsonStringField(p, "to")
+	fromAddr := jsonStringField(p, "from")
 	if amountInStr == "" || toAddr == "" {
 		sdk.Abort("amount_in and to required")
+	}
+	// Mirror the real pool: `from` is mandatory and DrawAssetFrom requires
+	// from == caller (no allowance pull). A missing/mismatched `from` must
+	// fail here exactly as the real pool would — never silently succeed.
+	c := caller()
+	if fromAddr == "" {
+		sdk.Abort("from address [] invalid")
+	}
+	if fromAddr != c {
+		sdk.Abort("can only draw assets from caller")
 	}
 	amountIn := parseAmount(amountInStr)
 
@@ -243,8 +259,7 @@ func Swap(payload *string) *string {
 		}
 	}
 
-	// Debit the caller (the marketplace holds asset_in after escrowIn).
-	c := caller()
+	// Debit the caller (== from; the marketplace holds asset_in after escrowIn).
 	debit(c, amountIn)
 
 	// Credit the recipient with the output amount.

@@ -580,3 +580,42 @@ func TestSettleTokenMissingMinSettleOutRejected(t *testing.T) {
 		NftContractID, DexMockID, DexMockID)
 	CallMarket(t, ct, "list", []byte(listPayload), nil, seller, "", false, gas, "")
 }
+
+// ---------------------------------------------------------------------------
+// TestDexSwapRequiresFromEqualsCaller
+//
+// Regression guard for the F2 fix. The real DEX pool (contracts/dex/main.go +
+// contracts/asset/asset.go @ 09af7ee) HARD-ABORTS a swap whose `from` is
+// absent (VerifyAddress=="unknown") and DrawAssetFrom enforces
+// from == caller (no allowance pull). magi-market's dexSwapTo therefore must
+// send from = its own contract address. This test pins that invariant in the
+// faithful mock so a regression (dropping `from`, or sending a foreign one)
+// fails loudly instead of being silently masked.
+// ---------------------------------------------------------------------------
+
+func TestDexSwapRequiresFromEqualsCaller(t *testing.T) {
+	ct := dexMockSetup(t, 0)
+
+	actor := "hive:actor"
+	recip := "hive:recip"
+	MintDexMock(t, ct, actor, 100000)
+
+	// (a) `from` absent → pool hard-aborts (mirrors VerifyAddress=="unknown").
+	CallDexMock(t, ct, "swap",
+		[]byte(`{"asset_in":"x","amount_in":"1000","asset_out":"y","min_amount_out":"1","to":"hive:recip"}`),
+		actor, false, "from address [] invalid")
+
+	// (b) `from` != caller → pool aborts (DrawAssetFrom: from must be caller).
+	CallDexMock(t, ct, "swap",
+		[]byte(`{"asset_in":"x","amount_in":"1000","asset_out":"y","min_amount_out":"1","from":"hive:someoneelse","to":"hive:recip"}`),
+		actor, false, "can only draw assets from caller")
+
+	// (c) `from` == caller → success; caller debited, recipient credited 95%.
+	actorBefore := QueryDexMockBalance(t, ct, actor)
+	recipBefore := QueryDexMockBalance(t, ct, recip)
+	CallDexMock(t, ct, "swap",
+		[]byte(`{"asset_in":"x","amount_in":"1000","asset_out":"y","min_amount_out":"1","from":"hive:actor","to":"hive:recip"}`),
+		actor, true, "")
+	assert.Equal(t, uint64(1000), actorBefore-QueryDexMockBalance(t, ct, actor), "caller debited amount_in")
+	assert.Equal(t, uint64(950), QueryDexMockBalance(t, ct, recip)-recipBefore, "recipient credited 95% out")
+}
