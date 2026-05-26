@@ -708,7 +708,48 @@ func decodeNftU64(s *string) uint64 {
 	return binary.LittleEndian.Uint64(buf[:])
 }
 
+// ===================================
+// Native asset helpers (HBD / HIVE)
+// ===================================
+//
+// `paymentToken` was previously interpreted exclusively as a contract id
+// (magi_token / utxo-mapping). The strings "hive" and "hbd" route through
+// the L2 ledger via `hive.draw` (pull from caller's transfer.allow intent)
+// and `hive.transfer` (pay out from the contract). Balance reads use
+// `hive.get_balance`. This lets every flow that goes through the three
+// primitives below — listings, auctions, mint spots, offers, bundles,
+// rentals, token sales — accept native HBD/HIVE without per-flow changes.
+
+const nativeAssetHive = "hive"
+const nativeAssetHbd = "hbd"
+
+func isNativeAsset(s string) bool {
+	return s == nativeAssetHive || s == nativeAssetHbd
+}
+
+func nativeAssetOf(s string) sdk.Asset {
+	if s == nativeAssetHbd {
+		return sdk.AssetHbd
+	}
+	return sdk.AssetHive
+}
+
+// nativeAmountInt64 narrows a *big.Int to int64. The native sdk helpers
+// take int64; aborts on overflow rather than silently truncating.
+func nativeAmountInt64(v *big.Int) int64 {
+	if v == nil {
+		return 0
+	}
+	if !v.IsInt64() {
+		sdk.Abort("native amount overflows int64")
+	}
+	return v.Int64()
+}
+
 func tokenBalanceOf(tokenContract, account string) *big.Int {
+	if isNativeAsset(tokenContract) {
+		return big.NewInt(sdk.GetBalance(sdk.Address(account), nativeAssetOf(tokenContract)))
+	}
 	if v := sdk.ContractStateGet(tokenContract, "bal|"+account); v != nil && *v != "" {
 		return decodeTokenBig(v)
 	}
@@ -991,7 +1032,22 @@ func clearPendingOwner() {
 }
 
 // big.Int variants of the token call helpers (added now, swapped in later tasks).
+//
+// Native branch (paymentToken in {"hive","hbd"}): the L2 ledger handles
+// balances via `hive.draw` (pull from the caller's signed transfer.allow
+// intent) and `hive.transfer` (pay out from the contract). The contract
+// itself is always the recipient of an escrow draw, so the explicit `to`
+// argument is unused on the native path; we still assert `from == msg.caller`
+// so the semantics match the magi_token path (caller pays).
 func tokenTransferFromBig(tokenContract, from, to string, amount *big.Int) {
+	if isNativeAsset(tokenContract) {
+		caller := sdk.GetEnvKey("msg.caller")
+		if caller == nil || *caller != from {
+			sdk.Abort("native payment requires intent from msg.caller")
+		}
+		sdk.HiveDraw(nativeAmountInt64(amount), nativeAssetOf(tokenContract))
+		return
+	}
 	payload := `{"from":"` + from + `","to":"` + to + `","amount":"` + formatMoney(amount) + `"}`
 	if sdk.ContractCallSimple(tokenContract, "transferFrom", payload) == nil {
 		sdk.Abort("transferFrom call failed")
@@ -999,6 +1055,10 @@ func tokenTransferFromBig(tokenContract, from, to string, amount *big.Int) {
 }
 
 func tokenTransferBig(tokenContract, to string, amount *big.Int) {
+	if isNativeAsset(tokenContract) {
+		sdk.HiveTransfer(sdk.Address(to), nativeAmountInt64(amount), nativeAssetOf(tokenContract))
+		return
+	}
 	payload := `{"to":"` + to + `","amount":"` + formatMoney(amount) + `"}`
 	if sdk.ContractCallSimple(tokenContract, "transfer", payload) == nil {
 		sdk.Abort("transfer call failed")
