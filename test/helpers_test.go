@@ -21,6 +21,9 @@ var _ = embed.FS{}
 
 const MarketContractID = "market"
 const TokenID = "paytoken"
+// AssetTokenID is a 2nd magi_token instance used as the SELLABLE asset in
+// token-for-token sale tests (distinct from the payment token).
+const AssetTokenID = "assettoken"
 const NftContractID = "nft"
 
 // FeeTokenID is the fee-on-transfer mock's contract id. The marketplace passes
@@ -90,6 +93,7 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct := test_utils.NewContractTest()
 	ct.RegisterContract(MarketContractID, ownerAddress, MarketWasm)
 	ct.RegisterContract(TokenID, ownerAddress, TokenWasm)
+	ct.RegisterContract(AssetTokenID, ownerAddress, TokenWasm)
 	ct.RegisterContract(NftContractID, ownerAddress, NftWasm)
 	ct.RegisterContract(FeeTokenID, ownerAddress, FeeTokenWasm)
 	ct.RegisterContract(UtxoMockID, ownerAddress, UtxoMockWasm)

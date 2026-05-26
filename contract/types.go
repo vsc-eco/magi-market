@@ -211,6 +211,46 @@ type ListingResponse struct {
 	StartBlock      uint64 `json:"startBlock"`
 }
 
+// ===================================
+// Token-contract (ERC-20) fixed-price sale — separate from NFT listings.
+// Asset = `Amount` of an ERC-20 `TokenContract` (big.Int decimal strings;
+// no tokenId / collection / royalty / soulbound). Custody is
+// approval-based: the seller grants the market an ERC-20 allowance
+// (`approve(contract:<market>, >= amount)`) and `buyToken` pulls the
+// asset via `transferFrom` (atomic; reverts + refunds if short).
+// ===================================
+
+type ListTokenPayload struct {
+	TokenContract   string `json:"tokenContract"`
+	Amount          string `json:"amount"`
+	PaymentToken    string `json:"paymentToken"`
+	PricePerUnit    string `json:"pricePerUnit"`
+	ExpirationBlock uint64 `json:"expirationBlock"`
+	StartBlock      uint64 `json:"startBlock"`
+}
+
+type BuyTokenPayload struct {
+	ListingId uint64 `json:"listingId"`
+	Amount    string `json:"amount"`
+}
+
+type TokenListingIdPayload struct {
+	ListingId uint64 `json:"listingId"`
+}
+
+type TokenListingResponse struct {
+	ListingId       uint64 `json:"listingId"`
+	Seller          string `json:"seller"`
+	TokenContract   string `json:"tokenContract"`
+	Amount          string `json:"amount"`
+	PricePerUnit    string `json:"pricePerUnit"`
+	PaymentToken    string `json:"paymentToken"`
+	Active          bool   `json:"active"`
+	ExpirationBlock uint64 `json:"expirationBlock"`
+	StartBlock      uint64 `json:"startBlock"`
+	FeeBps          uint64 `json:"feeBps"`
+}
+
 type OfferResponse struct {
 	OfferId         uint64 `json:"offerId"`
 	Buyer           string `json:"buyer"`

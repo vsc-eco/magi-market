@@ -581,3 +581,50 @@ func TestBundleRoyaltyLockedAtListing(t *testing.T) {
 	marketBal := QueryTokenBalance(t, ct, MarketContractAddress)
 	assert.Equal(t, uint64(0), marketBal, "market should have zero residual")
 }
+
+// TestListViaPerTokenApprove: the seller authorizes the marketplace with a
+// per-token ERC-6909 approve(spender=market, id, amount) instead of a
+// blanket setApprovalForAll. doList must accept it, and doBuy must drive
+// magi_nft's safeTransferFrom through that allowance (decremented per sale).
+func TestListViaPerTokenApprove(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+	seller := ownerAddress
+	buyer := "hive:buyer"
+
+	MintNft(t, ct, seller, "1", 5, 100)
+	// Per-token approve ONLY — no setApprovalForAll.
+	CallNft(t, ct, "approve",
+		[]byte(fmt.Sprintf(`{"spender":"%s","id":"1","amount":5}`, MarketContractAddress)),
+		nil, seller, true, gas, "")
+	MintAndApproveToken(t, ct, buyer, 5000)
+
+	// List 5 — allowance (5) >= amount (5) → accepted.
+	CallMarket(t, ct, "list",
+		[]byte(fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)),
+		nil, seller, "", true, gas, "")
+
+	// Buy 2 then 3 — safeTransferFrom rides the per-token allowance.
+	CallMarket(t, ct, "buy", []byte(`{"listingId":0,"amount":2}`), nil, buyer, "", true, gas, "")
+	assert.Equal(t, uint64(2), QueryNftBalance(t, ct, buyer, "1"), "buyer has 2 via allowance-driven transfer")
+	CallMarket(t, ct, "buy", []byte(`{"listingId":0,"amount":3}`), nil, buyer, "", true, gas, "")
+	assert.Equal(t, uint64(5), QueryNftBalance(t, ct, buyer, "1"), "buyer has all 5")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "1"), "seller transferred all 5")
+}
+
+// TestListPerTokenApproveInsufficient: a per-token allowance smaller than
+// the listed amount is rejected by doList (no operator approval either).
+func TestListPerTokenApproveInsufficient(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+	seller := ownerAddress
+
+	MintNft(t, ct, seller, "1", 5, 100)
+	CallNft(t, ct, "approve",
+		[]byte(fmt.Sprintf(`{"spender":"%s","id":"1","amount":2}`, MarketContractAddress)),
+		nil, seller, true, gas, "")
+
+	CallMarket(t, ct, "list",
+		[]byte(fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)),
+		nil, seller, "", false, gas, "Marketplace not approved as operator or sufficient per-token allowance for this NFT collection")
+}

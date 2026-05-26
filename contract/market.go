@@ -88,8 +88,16 @@ func doList(caller string, p *ListPayload) uint64 {
 	}
 
 	contractAddr := getContractAddress()
+	// Authorization: operator approval (setApprovalForAll) OR a per-token
+	// ERC-6909 allowance (approve) covering the listed amount. The
+	// per-token path is least-privilege — scoped to exactly this token id
+	// instead of blanket-approving the whole collection. magi_nft's
+	// safeTransferFrom (driven by doBuy) honours the same allowance
+	// fallback and decrements it per sale. Mirrors the listMintSpots gate.
 	if !nftIsApprovedForAll(p.NftContract, caller, contractAddr) {
-		sdk.Abort("Marketplace not approved as operator for this NFT collection")
+		if nftAllowanceOf(p.NftContract, caller, contractAddr, p.TokenId) < p.Amount {
+			sdk.Abort("Marketplace not approved as operator or sufficient per-token allowance for this NFT collection")
+		}
 	}
 	if nftBalanceOf(p.NftContract, caller, p.TokenId) < p.Amount {
 		sdk.Abort("Insufficient NFT balance to list")
@@ -519,9 +527,13 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 		sdk.Abort("Accept amount exceeds offer amount")
 	}
 
-	// Clean preflight instead of a raw cross-call abort.
+	// Clean preflight instead of a raw cross-call abort. Operator approval
+	// OR a per-token allowance (least-privilege) covering the accepted
+	// amount — magi_nft's safeTransferFrom honours either.
 	if !nftIsApprovedForAll(nftContract, caller, getContractAddress()) {
-		sdk.Abort("Marketplace not approved as operator to fulfill offer")
+		if nftAllowanceOf(nftContract, caller, getContractAddress(), tokenId) < acceptAmount {
+			sdk.Abort("Marketplace not approved as operator or sufficient per-token allowance to fulfill offer")
+		}
 	}
 	if nftBalanceOf(nftContract, caller, tokenId) < acceptAmount {
 		sdk.Abort("Insufficient NFT balance to fulfill offer")
@@ -1226,7 +1238,9 @@ func ListBundle(payload *string) *string {
 			sdk.Abort("Cannot list soulbound tokens")
 		}
 		if !nftIsApprovedForAll(p.NftContract, caller, contractAddr) {
-			sdk.Abort("Marketplace not approved as operator for this NFT collection")
+			if nftAllowanceOf(p.NftContract, caller, contractAddr, item.TokenId) < item.Amount {
+				sdk.Abort("Marketplace not approved as operator or sufficient per-token allowance for this NFT collection")
+			}
 		}
 		if nftBalanceOf(p.NftContract, caller, item.TokenId) < item.Amount {
 			sdk.Abort("Insufficient NFT balance to list")
@@ -1733,7 +1747,9 @@ func ProposeSwap(payload *string) *string {
 	// Proposer preflight on offered NFT
 	contractAddr := getContractAddress()
 	if !nftIsApprovedForAll(p.OfferedNft, caller, contractAddr) {
-		sdk.Abort("Marketplace not approved as operator for this NFT collection")
+		if nftAllowanceOf(p.OfferedNft, caller, contractAddr, p.OfferedTokenId) < p.OfferedAmount {
+			sdk.Abort("Marketplace not approved as operator or sufficient per-token allowance for this NFT collection")
+		}
 	}
 	if nftBalanceOf(p.OfferedNft, caller, p.OfferedTokenId) < p.OfferedAmount {
 		sdk.Abort("Insufficient NFT balance")
@@ -1813,7 +1829,9 @@ func AcceptSwap(payload *string) *string {
 	// Preflight: proposer still holds + approved for offered NFT
 	mkt := getContractAddress()
 	if !nftIsApprovedForAll(on, proposer, mkt) {
-		sdk.Abort("Proposer no longer holds offered NFT")
+		if nftAllowanceOf(on, proposer, mkt, oti) < oa {
+			sdk.Abort("Proposer no longer holds offered NFT")
+		}
 	}
 	if nftBalanceOf(on, proposer, oti) < oa {
 		sdk.Abort("Proposer no longer holds offered NFT")
@@ -1821,7 +1839,9 @@ func AcceptSwap(payload *string) *string {
 
 	// Preflight: acceptor holds + approved for wanted NFT
 	if !nftIsApprovedForAll(wn, acceptor, mkt) {
-		sdk.Abort("Marketplace not approved as operator for this NFT collection")
+		if nftAllowanceOf(wn, acceptor, mkt, wti) < wa {
+			sdk.Abort("Marketplace not approved as operator or sufficient per-token allowance for this NFT collection")
+		}
 	}
 	if nftBalanceOf(wn, acceptor, wti) < wa {
 		sdk.Abort("Insufficient NFT balance")
@@ -2048,7 +2068,9 @@ func ListRental(payload *string) *string {
 
 	contractAddr := getContractAddress()
 	if !nftIsApprovedForAll(p.NftContract, caller, contractAddr) {
-		sdk.Abort("Marketplace not approved as operator for this NFT collection")
+		if nftAllowanceOf(p.NftContract, caller, contractAddr, p.TokenId) < p.Amount {
+			sdk.Abort("Marketplace not approved as operator or sufficient per-token allowance for this NFT collection")
+		}
 	}
 	if nftBalanceOf(p.NftContract, caller, p.TokenId) < p.Amount {
 		sdk.Abort("Insufficient NFT balance to list")
