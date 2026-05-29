@@ -259,7 +259,10 @@ func TestAcceptOfferWithZeroFee(t *testing.T) {
 	assert.Equal(t, uint64(5), QueryNftBalance(t, ct, buyer, "1"))
 }
 
-func TestAcceptOfferWhenPaused(t *testing.T) {
+// Post-M3 fix: acceptOffer is pause-gated. The buyer can still recover
+// their escrow via cancelOffer while paused; the seller's accept waits
+// for `unpause`.
+func TestAcceptOfferBlockedWhilePaused(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
@@ -271,11 +274,12 @@ func TestAcceptOfferWhenPaused(t *testing.T) {
 	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", true, gas, "")
 
-	// acceptOffer works even when paused so sellers can finalize existing offers
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
-	CallMarket(t, ct, "acceptOffer", []byte(`{"offerId":0}`), nil, ownerAddress, "", true, gas, "")
+	CallMarket(t, ct, "acceptOffer", []byte(`{"offerId":0}`), nil, ownerAddress, "", false, gas, "Contract is paused")
 
-	// Verify NFT transferred to buyer
+	// After unpause the seller can finalize.
+	CallMarket(t, ct, "unpause", nil, nil, ownerAddress, "", true, gas, "")
+	CallMarket(t, ct, "acceptOffer", []byte(`{"offerId":0}`), nil, ownerAddress, "", true, gas, "")
 	assert.Equal(t, uint64(5), QueryNftBalance(t, ct, buyer, "1"))
 }
 

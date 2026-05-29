@@ -302,52 +302,67 @@ func TestWhitelistNonOwner(t *testing.T) {
 // Emergency Withdraw Tests
 // ===================================
 
-func TestEmergencyWithdrawNft(t *testing.T) {
+// Post-C1: NFT branch is disabled — escrowed NFTs are recoverable only via
+// the regular cancel paths (which still work while paused via their own
+// recovery semantics). emergencyWithdraw refuses the NFT branch flat.
+func TestEmergencyWithdrawNftDisabled(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 	MintNft(t, ct, ownerAddress, "1", 5, 100)
 	ApproveNftForMarket(t, ct, ownerAddress)
 
-	// Under the approval-custody model listings never escrow the NFT, but
-	// auctions still do. Create an auction so the marketplace genuinely holds
-	// the NFT, giving emergencyWithdraw something real to rescue.
 	auctionPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","auctionType":"english","startPrice":"1000","endPrice":"0","startBlock":100,"endBlock":200}`, NftContractID, TokenID)
 	CallMarket(t, ct, "createAuction", []byte(auctionPayload), nil, ownerAddress, "", true, gas, "")
 	assert.Equal(t, uint64(5), QueryNftBalance(t, ct, MarketContractAddress, "1"))
 
-	// Pause
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
 
-	// Emergency withdraw
 	withdrawPayload := fmt.Sprintf(`{"tokenType":"nft","contract":"%s","tokenId":"1","amount":"5","to":"hive:rescue"}`, NftContractID)
-	_, _, logs := CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, ownerAddress, "", true, gas, "")
-	AssertEventEmitted(t, logs, "emergency_withdraw")
+	CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, ownerAddress, "", false, gas, "Emergency NFT withdraw disabled")
 
-	// NFT sent to rescue address
-	rescueNft := QueryNftBalance(t, ct, "hive:rescue", "1")
-	assert.Equal(t, uint64(5), rescueNft)
+	// NFT remains escrowed.
+	assert.Equal(t, uint64(5), QueryNftBalance(t, ct, MarketContractAddress, "1"))
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, "hive:rescue", "1"))
 }
 
-func TestEmergencyWithdrawToken(t *testing.T) {
+// Post-C1: token branch refuses to drain a currently-WHITELISTED payment
+// token (those funds back live escrows). Only non-whitelisted dust is
+// recoverable here.
+func TestEmergencyWithdrawWhitelistedTokenBlocked(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	// Make offer (escrow tokens into marketplace)
 	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", true, gas, "")
 
-	// Pause
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
 
-	// Emergency withdraw tokens
 	withdrawPayload := fmt.Sprintf(`{"tokenType":"token","contract":"%s","tokenId":"","amount":"5000","to":"%s"}`, TokenID, buyer)
-	CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, ownerAddress, "", true, gas, "")
+	CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, ownerAddress, "", false, gas, "active payment token")
 
-	buyerBalance := QueryTokenBalance(t, ct, buyer)
-	assert.Equal(t, uint64(50000), buyerBalance)
+	// Buyer's escrow is intact; nothing was forced out.
+	assert.Equal(t, uint64(45000), QueryTokenBalance(t, ct, buyer))
+}
+
+// Post-C1: an UNwhitelisted token (e.g. accidentally sent to the contract)
+// can still be rescued — that's the legitimate dust case the entrypoint
+// remains for. We use a token never registered on the whitelist (the asset
+// token mock from InitAssetToken) and seed the contract with a balance to
+// drain.
+func TestEmergencyWithdrawNonWhitelistedTokenAllowed(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+	InitAssetToken(t, ct)
+	// Asset token is whitelisted by SeedTestPaymentTokens — remove it
+	// first so it qualifies as "dust" for emergency withdraw.
+	CallMarket(t, ct, "removePaymentToken", []byte(`{"token":"`+AssetTokenID+`"}`), nil, ownerAddress, "", true, gas, "")
+	MintAsset(t, ct, MarketContractAddress, 1000)
+	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
+	withdrawPayload := fmt.Sprintf(`{"tokenType":"token","contract":"%s","tokenId":"","amount":"1000","to":"hive:rescue"}`, AssetTokenID)
+	CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, ownerAddress, "", true, gas, "")
 }
 
 func TestEmergencyWithdrawNotPaused(t *testing.T) {

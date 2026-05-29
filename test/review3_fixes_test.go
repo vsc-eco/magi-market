@@ -158,10 +158,11 @@ func TestOtherUserCanBidOnAuction(t *testing.T) {
 }
 
 // ===================================
-// Fix 5: Pause asymmetry fixed
+// Post-M3 fix: accept{Offer,CollectionOffer} are pause-gated
+// (the buyer can still recover their escrow via cancelOffer while paused).
 // ===================================
 
-func TestAcceptOfferWorksWhenPaused(t *testing.T) {
+func TestAcceptOfferBlockedWhilePaused_R3(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
@@ -174,17 +175,15 @@ func TestAcceptOfferWorksWhenPaused(t *testing.T) {
 	offerPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"100"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", true, gas, "")
 
-	// Pause the contract
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
+	CallMarket(t, ct, "acceptOffer", []byte(`{"offerId":0}`), nil, seller, "", false, gas, "Contract is paused")
 
-	// Seller can still accept offers when paused
+	CallMarket(t, ct, "unpause", nil, nil, ownerAddress, "", true, gas, "")
 	CallMarket(t, ct, "acceptOffer", []byte(`{"offerId":0}`), nil, seller, "", true, gas, "")
-
-	// Verify transfers happened
 	assert.Equal(t, uint64(5), QueryNftBalance(t, ct, buyer, "1"))
 }
 
-func TestAcceptCollectionOfferWorksWhenPaused(t *testing.T) {
+func TestAcceptCollectionOfferBlockedWhilePaused(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
@@ -194,16 +193,14 @@ func TestAcceptCollectionOfferWorksWhenPaused(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, buyer, 5000)
 
-	// Collection offer (no tokenId)
 	offerPayload := fmt.Sprintf(`{"nftContract":"%s","amount":5,"paymentToken":"%s","pricePerUnit":"100"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "makeOffer", []byte(offerPayload), nil, buyer, "", true, gas, "")
 
-	// Pause
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
+	CallMarket(t, ct, "acceptCollectionOffer", []byte(`{"offerId":0,"tokenId":"1","amount":5}`), nil, seller, "", false, gas, "Contract is paused")
 
-	// Seller can still accept collection offers when paused
+	CallMarket(t, ct, "unpause", nil, nil, ownerAddress, "", true, gas, "")
 	CallMarket(t, ct, "acceptCollectionOffer", []byte(`{"offerId":0,"tokenId":"1","amount":5}`), nil, seller, "", true, gas, "")
-
 	assert.Equal(t, uint64(5), QueryNftBalance(t, ct, buyer, "1"))
 }
 

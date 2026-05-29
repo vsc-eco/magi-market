@@ -74,6 +74,10 @@ func doListToken(caller string, p *ListTokenPayload) uint64 {
 	}
 
 	assertPaymentTokenAllowed(p.PaymentToken)
+	// Token-sale listings must respect the same collection denylist as NFT
+	// listings — without this, an admin denying a misbehaving token can
+	// still see fresh listings created against it.
+	assertCollectionAllowed(p.TokenContract)
 
 	// Preflight: seller must currently hold at least the listed amount.
 	// The market's allowance is enforced atomically by transferFrom at buy
@@ -181,6 +185,10 @@ func doBuyToken(caller string, p *BuyTokenPayload) {
 	}
 	tokenContract := getTokenListingField(p.ListingId, "tc")
 	paymentToken := getTokenListingField(p.ListingId, "pt")
+	// Re-validate the payment token at buy-time (de-whitelisted-after-list halt).
+	assertPaymentTokenAllowed(paymentToken)
+	// Re-validate the listed token's collection allowlist (mirror NFT path).
+	assertCollectionAllowed(tokenContract)
 	price := getTokenListingMoney(p.ListingId, "p")
 	feeBps := getTokenListingUint64(p.ListingId, "fb")
 
