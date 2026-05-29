@@ -239,6 +239,7 @@ func TestAcceptOfferWithZeroFee(t *testing.T) {
 	// Init with 0% fee
 	payload := fmt.Sprintf(`{"feeBps":0,"feeRecipient":"%s"}`, feeRecipientAddress)
 	CallMarket(t, ct, "init", []byte(payload), nil, ownerAddress, "", true, gas, "")
+	SeedTestPaymentTokens(t, ct)
 
 	seller := ownerAddress
 	buyer := "hive:buyer"

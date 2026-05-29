@@ -43,6 +43,7 @@ func Init(payload *string) *string {
 	if p.FeeRecipient == "" {
 		sdk.Abort("Fee recipient required")
 	}
+	assertValidAccount(p.FeeRecipient)
 
 	sdk.StateSetObject("isInit", "1")
 	sdk.StateSetObject("owner", *caller)
@@ -52,6 +53,22 @@ func Init(payload *string) *string {
 	setNextListingId(0)
 	setNextOfferId(0)
 	setNextAuctionId(0)
+	// Seed the min-bid-increment to the 1% floor so anti-snipe can't be
+	// griefed into indefinite extension on a fresh deploy. placeBid also
+	// floors at runtime (effectiveMinBidIncrementBps), so this is belt-and-
+	// suspenders for getInfo reporting / already-deployed instances.
+	setMinBidIncrementBps(defaultMinBidIncrementBps)
+
+	// Seed the payment-token whitelist with native HBD/HIVE so the contract
+	// is safe-by-default: any unrecognized custom token is rejected until
+	// the owner explicitly allows it. Without this, a malicious magi_token
+	// (lying balance reads + no-op transfer) could drive the
+	// MakeOffer/AcceptOffer flow into delivering NFTs for fake payments,
+	// and a malicious paymentToken's transfer hook could re-enter
+	// placeBid's refund path to drain pool funds. setPaymentTokenAllowed
+	// flips ptw_on=1 on the first allowed token.
+	setPaymentTokenAllowed(nativeAssetHive, true)
+	setPaymentTokenAllowed(nativeAssetHbd, true)
 
 	emitInit(*caller, p.FeeBps, p.FeeRecipient)
 	return jsonResponse(&SuccessResponse{Success: true})
@@ -69,6 +86,7 @@ func doList(caller string, p *ListPayload) uint64 {
 	if p.Amount == 0 {
 		sdk.Abort("Amount must be greater than zero")
 	}
+	assertValidTokenId(p.TokenId)
 	price := parseMoney(p.PricePerUnit)
 	if mIsZero(price) {
 		sdk.Abort("Price must be greater than zero")
@@ -76,8 +94,15 @@ func doList(caller string, p *ListPayload) uint64 {
 
 	assertPaymentTokenAllowed(p.PaymentToken)
 
-	if nftIsSoulbound(p.NftContract, p.TokenId) {
-		sdk.Abort("Cannot list soulbound tokens")
+	// Soulbound NFTs can only be transferred by the collection owner
+	// (magi_nft: `isSoulbound(id) && from != ownerAddr → abort`). Listings
+	// don't escrow — the buy-time transfer is seller→buyer directly — so a
+	// collection owner CAN list their own soulbound editions (the
+	// seller==owner transfer succeeds). A non-owner holder can't, so block
+	// them. (Auctions/rentals escrow to the market, which is not the
+	// collection owner, so they stay unconditionally blocked.)
+	if nftIsSoulbound(p.NftContract, p.TokenId) && nftGetOwner(p.NftContract) != caller {
+		sdk.Abort("Cannot list soulbound tokens (only the collection owner can transfer them)")
 	}
 	assertCollectionAllowed(p.NftContract)
 
@@ -105,6 +130,12 @@ func doList(caller string, p *ListPayload) uint64 {
 
 	// F1: validate payoutMode / payoutL1Address
 	if p.PayoutMode == "unmap" {
+		if isNativeAsset(p.PaymentToken) {
+			// `unmapTo` routes through ContractCallSimple("hive"/"hbd", "unmap", …)
+			// which has no contract to call — every buy would abort at
+			// buy time, bricking the listing. Reject at list time.
+			sdk.Abort("native paymentToken cannot use unmap payout")
+		}
 		if p.PayoutL1Address == "" {
 			sdk.Abort("payoutL1Address required for unmap payout")
 		}
@@ -121,6 +152,11 @@ func doList(caller string, p *ListPayload) uint64 {
 	if p.SettleToken != "" {
 		if p.PayoutMode == "unmap" {
 			sdk.Abort("payout and settleToken are mutually exclusive")
+		}
+		if isNativeAsset(p.PaymentToken) {
+			// Same as unmap: dexSwapTo would invoke a non-existent
+			// contract id for native paymentToken, aborting every buy.
+			sdk.Abort("native paymentToken cannot use settleToken/dex payout")
 		}
 		if p.DexPool == "" {
 			sdk.Abort("dexPool required for settleToken")
@@ -268,6 +304,29 @@ func doBuy(caller string, p *BuyPayload) {
 
 	totalCost := mMulU64(pricePerUnit, p.Amount)
 
+	// Slippage guard: a seller who races `updateListing` to bump the price
+	// just before this tx lands would otherwise silently drain extra funds
+	// from any buyer who pre-approved more than the listing's old total.
+	// Empty MaxTotalPrice disables the check (back-compat for callers that
+	// don't supply it).
+	if p.MaxTotalPrice != "" {
+		maxTotal := parseMoney(p.MaxTotalPrice)
+		if mCmp(totalCost, maxTotal) > 0 {
+			sdk.Abort("Total cost exceeds buyer's MaxTotalPrice")
+		}
+	}
+
+	// CEI (F5 template): decrement remaining + flip active BEFORE ANY
+	// external call (including escrowIn). A re-entry through a malicious
+	// whitelisted paymentToken's transferFrom hook would otherwise read
+	// the stale `a` and let the same listing be bought twice in nested
+	// frames; this ordering plus tx-revert-on-abort closes the window.
+	newRemaining := safeSub(remaining, p.Amount)
+	if newRemaining == 0 {
+		setListingField(p.ListingId, "act", "0")
+	}
+	setListingUint64(p.ListingId, "a", newRemaining)
+
 	received := escrowIn(paymentToken, caller, totalCost)
 
 	// Load royalty split snapshot; fall back to legacy single-entry for pre-B2 in-flight entries.
@@ -283,14 +342,17 @@ func doBuy(caller string, p *BuyPayload) {
 		tokenTransferBig(paymentToken, getFeeRecipient(), fee)
 	}
 	distributeRoyaltySplitsResolved(paymentToken, received, snapRecips, snapBps)
-	// Seller-leg: F1 unmap, F2 DEX-routed settlement, or legacy mapped-token transfer.
+	// Seller-leg: F1 unmap, F2 DEX-routed settlement, or legacy mapped-token
+	// transfer. Read `pm` first and only read `st`/`dp`/`pl1`/`mso` on the
+	// branch that needs them (they're mutually exclusive per the F2 checks),
+	// so an unmap listing skips the `st` read and a legacy listing reads only
+	// `pm`+`st`.
 	pm := getListingField(p.ListingId, "pm")
-	st := getListingField(p.ListingId, "st")
 	if pm == "unmap" {
 		if !mIsZero(sellerPayment) {
 			unmapTo(paymentToken, getListingField(p.ListingId, "pl1"), sellerPayment)
 		}
-	} else if st != "" {
+	} else if st := getListingField(p.ListingId, "st"); st != "" {
 		if !mIsZero(sellerPayment) {
 			dexSwapTo(
 				getListingField(p.ListingId, "dp"),
@@ -306,12 +368,6 @@ func doBuy(caller string, p *BuyPayload) {
 			tokenTransferBig(paymentToken, seller, sellerPayment)
 		}
 	}
-
-	newRemaining := safeSub(remaining, p.Amount)
-	if newRemaining == 0 {
-		setListingField(p.ListingId, "act", "0")
-	}
-	setListingUint64(p.ListingId, "a", newRemaining)
 
 	emitBought(p.ListingId, caller, p.Amount, formatMoney(received), formatMoney(fee), formatMoney(royTot))
 }
@@ -404,6 +460,8 @@ func MakeOffer(payload *string) *string {
 	if p.NftContract == "" || p.PaymentToken == "" {
 		sdk.Abort("NFT contract and payment token required")
 	}
+	// MakeOffer allows TokenId == "" (collection offer); when set, validate.
+	assertValidTokenId(p.TokenId)
 	assertCollectionAllowed(p.NftContract)
 
 	price := parseMoney(p.PricePerUnit)
@@ -427,12 +485,15 @@ func MakeOffer(payload *string) *string {
 		sdk.Abort("Combined fee and royalty exceed 100%")
 	}
 
-	// Escrow payment with balance-delta; store the ACTUAL received total so
-	// cancel refunds and accept payouts can never over-distribute.
-	received := escrowIn(p.PaymentToken, caller, totalOffer)
-
-	// Create offer
+	// CEI (F5 template): claim the new offer-id AND write all of its
+	// state fields (except `esc`, which needs `received`) BEFORE the
+	// external `escrowIn`. Inner re-entry through a malicious whitelisted
+	// paymentToken's transferFrom callback would otherwise read the same
+	// `id` from getNextOfferId() and collide with outer's writes; with
+	// nxt_o bumped here, the inner gets id+1 and writes to a separate
+	// row, leaving outer's `id`-row intact.
 	id := getNextOfferId()
+	setNextOfferId(id + 1)
 	isCol := p.TokenId == ""
 
 	setOfferField(id, "b", caller)
@@ -440,7 +501,6 @@ func MakeOffer(payload *string) *string {
 	setOfferField(id, "ti", p.TokenId)
 	setOfferUint64(id, "a", p.Amount)
 	setOfferMoney(id, "p", price)
-	setOfferMoney(id, "esc", received)
 	setOfferField(id, "pt", p.PaymentToken)
 	setOfferField(id, "act", "1")
 	setOfferUint64(id, "exp", p.ExpirationBlock)
@@ -453,7 +513,11 @@ func MakeOffer(payload *string) *string {
 	if isCol {
 		setOfferField(id, "col", "1")
 	}
-	setNextOfferId(id + 1)
+
+	// Escrow payment with balance-delta; store the ACTUAL received total so
+	// cancel refunds and accept payouts can never over-distribute.
+	received := escrowIn(p.PaymentToken, caller, totalOffer)
+	setOfferMoney(id, "esc", received)
 
 	emitOfferMade(id, caller, p.NftContract, p.TokenId, p.Amount, formatMoney(price), p.PaymentToken, p.ExpirationBlock, isCol)
 	return jsonResponse(&CreatedResponse{Success: true, Id: id})
@@ -488,10 +552,16 @@ func CancelOffer(payload *string) *string {
 	}
 	paymentToken := getOfferField(p.OfferId, "pt")
 	refund := getOfferMoney(p.OfferId, "esc")
+	// CEI: flip the offer inactive (and zero its escrow) BEFORE the refund
+	// call. A malicious whitelisted paymentToken's transfer callback could
+	// otherwise re-enter cancelOffer, see act=1 and the unchanged esc, and
+	// keep refunding `esc` worth of paymentToken per recursion level until
+	// the call stack runs out — draining pool funds.
+	setOfferField(p.OfferId, "act", "0")
 	if !mIsZero(refund) {
+		setOfferMoney(p.OfferId, "esc", mZero())
 		tokenTransferBig(paymentToken, buyer, refund)
 	}
-	setOfferField(p.OfferId, "act", "0")
 	emitOfferCancelled(p.OfferId, buyer)
 	return jsonResponse(&SuccessResponse{Success: true})
 }
@@ -558,6 +628,21 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 	offerSnapRecips, offerSnapBps := loadOfferRoyaltySplitSnapshot(offerId, royaltyRecipient, lockedRoyaltyBps)
 	fee, royTot, sellerPayment := feeAndRoyaltyOf(totalPrice, lockedFeeBps, offerSnapRecips, offerSnapBps)
 
+	// Checks-Effects-Interactions: flip every state field BEFORE any
+	// external call so a re-entry through the buyer-supplied nftContract
+	// (during nftSafeTransferFrom) or through the paymentToken (during
+	// tokenTransferBig) cannot read stale `esc`/`a`/`act` and double-spend
+	// against this offer. Without this ordering, the outer continuation's
+	// stale local `escrowed` would overwrite the inner's decrement and
+	// leak pool funds on cancel.
+	newRemaining := safeSub(offerAmount, acceptAmount)
+	setOfferMoney(offerId, "esc", mSub(escrowed, totalPrice))
+	if newRemaining == 0 {
+		setOfferField(offerId, "act", "0")
+	} else {
+		setOfferUint64(offerId, "a", newRemaining)
+	}
+
 	nftSafeTransferFrom(nftContract, caller, buyer, tokenId, acceptAmount)
 
 	if !mIsZero(sellerPayment) {
@@ -567,14 +652,6 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 		tokenTransferBig(paymentToken, getFeeRecipient(), fee)
 	}
 	distributeRoyaltySplitsResolved(paymentToken, totalPrice, offerSnapRecips, offerSnapBps)
-
-	newRemaining := safeSub(offerAmount, acceptAmount)
-	setOfferMoney(offerId, "esc", mSub(escrowed, totalPrice))
-	if newRemaining == 0 {
-		setOfferField(offerId, "act", "0")
-	} else {
-		setOfferUint64(offerId, "a", newRemaining)
-	}
 
 	emitOfferAccepted(offerId, caller, buyer, acceptAmount, formatMoney(totalPrice), formatMoney(fee), formatMoney(royTot), tokenId)
 }
@@ -632,6 +709,7 @@ func AcceptCollectionOffer(payload *string) *string {
 	if p.TokenId == "" {
 		sdk.Abort("Token ID required for collection offer acceptance")
 	}
+	assertValidTokenId(p.TokenId)
 
 	doAcceptOffer(caller, p.OfferId, p.Amount, p.TokenId)
 	return jsonResponse(&SuccessResponse{Success: true})
@@ -692,6 +770,7 @@ func SetFeeRecipient(payload *string) *string {
 	if p.FeeRecipient == "" {
 		sdk.Abort("Fee recipient required")
 	}
+	assertValidAccount(p.FeeRecipient)
 
 	setStringState("fee_rcpt", p.FeeRecipient)
 	return jsonResponse(&SuccessResponse{Success: true})
@@ -846,9 +925,15 @@ func SetRoyalty(payload *string) *string {
 	if p.RoyaltyBps > 0 && p.RoyaltyRecipient == "" {
 		sdk.Abort("Royalty recipient required when royalty > 0")
 	}
+	assertValidAccount(p.RoyaltyRecipient)
 
 	setRoyaltyBps(p.NftContract, p.RoyaltyBps)
 	setRoyaltyRecipientState(p.NftContract, p.RoyaltyRecipient)
+	// Clear any stale multi-split state from a previous SetRoyaltySplits.
+	// Without this, resolveRoyaltySplits keeps returning the OLD multi
+	// splits (because it short-circuits on n > 0), silently sending
+	// royalties to addresses the owner intended to retire.
+	clearRoyaltySplits(p.NftContract)
 
 	emitRoyaltySet(p.NftContract, p.RoyaltyBps, p.RoyaltyRecipient)
 	return jsonResponse(&SuccessResponse{Success: true})
@@ -896,6 +981,7 @@ func SetRoyaltySplits(payload *string) *string {
 		if split.Recipient == "" {
 			sdk.Abort("Royalty split recipient required")
 		}
+		assertValidAccount(split.Recipient)
 		totalBps += split.Bps
 	}
 	if totalBps > 5000 {
@@ -993,8 +1079,15 @@ func AddPaymentToken(payload *string) *string {
 	if p.Token == "" {
 		sdk.Abort("Token address required")
 	}
+	// Optional balance-decoder binding. If provided it must be a known type;
+	// omitted leaves the token on legacy auto-probe.
+	if p.Decoder != "" && !isValidDecoder(p.Decoder) {
+		sdk.Abort("Invalid decoder (expected magi_token, utxo, or native)")
+	}
 
 	setPaymentTokenAllowed(p.Token, true)
+	setPaymentTokenDecoder(p.Token, p.Decoder)
+	emitPaymentToken("payment_token_added", p.Token)
 	return jsonResponse(&SuccessResponse{Success: true})
 }
 
@@ -1023,6 +1116,7 @@ func RemovePaymentToken(payload *string) *string {
 	}
 
 	setPaymentTokenAllowed(p.Token, false)
+	emitPaymentToken("payment_token_removed", p.Token)
 	return jsonResponse(&SuccessResponse{Success: true})
 }
 
@@ -1053,10 +1147,12 @@ func EmergencyWithdraw(payload *string) *string {
 	if p.Contract == "" || p.To == "" || p.Amount == "" {
 		sdk.Abort("Contract, to, and amount required")
 	}
+	assertValidAccount(p.To)
 	if p.TokenType == "nft" {
 		if p.TokenId == "" {
 			sdk.Abort("Token ID required for NFT withdraw")
 		}
+		assertValidTokenId(p.TokenId)
 		qty := parseMoney(p.Amount)
 		if !qty.IsUint64() {
 			sdk.Abort("NFT amount too large")
@@ -1093,6 +1189,13 @@ func SetMinBidIncrement(payload *string) *string {
 
 	if p.MinBidIncrementBps > 10000 {
 		sdk.Abort("Min bid increment must be <= 10000 basis points")
+	}
+	// Floor at 100 bps (1%) so that an English auction with anti-snipe
+	// cannot be indefinitely extended by an attacker placing `+1` bids
+	// each cycle at near-zero capital cost. The geometric growth caps
+	// the grief budget at roughly (1.01)^n * startPrice.
+	if p.MinBidIncrementBps < 100 {
+		sdk.Abort("Min bid increment must be >= 100 basis points (1%)")
 	}
 
 	setMinBidIncrementBps(p.MinBidIncrementBps)
@@ -1221,6 +1324,7 @@ func ListBundle(payload *string) *string {
 		if item.Amount == 0 {
 			sdk.Abort("Amount must be greater than zero for each bundle item")
 		}
+		assertValidTokenId(item.TokenId)
 	}
 
 	price := parseMoney(p.Price)
@@ -1231,11 +1335,16 @@ func ListBundle(payload *string) *string {
 	assertPaymentTokenAllowed(p.PaymentToken)
 	assertCollectionAllowed(p.NftContract)
 
+	// Like listings, bundles are approval-custody (no escrow) so the
+	// buy-time transfer is seller→buyer; the collection owner can include
+	// their own soulbound editions, a non-owner can't.
+	bundleSellerIsOwner := nftGetOwner(p.NftContract) == caller
+
 	// Approval-custody preflight for every item
 	contractAddr := getContractAddress()
 	for _, item := range p.Items {
-		if nftIsSoulbound(p.NftContract, item.TokenId) {
-			sdk.Abort("Cannot list soulbound tokens")
+		if nftIsSoulbound(p.NftContract, item.TokenId) && !bundleSellerIsOwner {
+			sdk.Abort("Cannot list soulbound tokens (only the collection owner can transfer them)")
 		}
 		if !nftIsApprovedForAll(p.NftContract, caller, contractAddr) {
 			if nftAllowanceOf(p.NftContract, caller, contractAddr, item.TokenId) < item.Amount {
@@ -1314,6 +1423,13 @@ func BuyBundle(payload *string) *string {
 	pt := getBundleField(p.BundleId, "pt")
 	price := getBundleMoney(p.BundleId, "p")
 
+	// CEI (F5 template): flip `act=0` BEFORE any external call (including
+	// `escrowIn`). A re-entry through a malicious whitelisted paymentToken
+	// would otherwise see act=1 and let the same bundle be bought twice
+	// in nested frames; this ordering plus tx-revert-on-abort closes the
+	// window.
+	setBundleField(p.BundleId, "act", "0")
+
 	received := escrowIn(pt, caller, price)
 
 	lockedFeeBps := getBundleUint64(p.BundleId, "fb")
@@ -1342,7 +1458,6 @@ func BuyBundle(payload *string) *string {
 		tokenTransferBig(pt, seller, sellerPayment)
 	}
 
-	setBundleField(p.BundleId, "act", "0")
 	emitBundleBought(p.BundleId, caller, formatMoney(received), formatMoney(fee), formatMoney(royTot))
 	return jsonResponse(&SuccessResponse{Success: true})
 }
@@ -1447,6 +1562,12 @@ func BatchList(payload *string) *string {
 	if len(p.Items) == 0 {
 		sdk.Abort("At least one item required")
 	}
+	// Cap batch size so a single tx can't exceed the rc_limit (each item is a
+	// full doList: ~16 state writes + cross-contract reads). Mirrors the
+	// bundle cap. Sweep is intentionally left uncapped.
+	if len(p.Items) > 20 {
+		sdk.Abort("Too many items (max 20)")
+	}
 
 	for i := range p.Items {
 		doList(caller, &p.Items[i])
@@ -1475,6 +1596,12 @@ func BatchBuy(payload *string) *string {
 
 	if len(p.Items) == 0 {
 		sdk.Abort("At least one item required")
+	}
+	// Cap batch size so a single tx can't exceed the rc_limit (each item is a
+	// full doBuy: ~16 state reads + 6-8 cross-contract calls). Mirrors the
+	// bundle cap. Sweep is intentionally left uncapped.
+	if len(p.Items) > 20 {
+		sdk.Abort("Too many items (max 20)")
 	}
 
 	for i := range p.Items {
@@ -1741,6 +1868,8 @@ func ProposeSwap(payload *string) *string {
 	if p.WantedAmount == 0 {
 		sdk.Abort("Wanted amount must be greater than zero")
 	}
+	assertValidTokenId(p.OfferedTokenId)
+	assertValidTokenId(p.WantedTokenId)
 
 	assertCollectionAllowed(p.OfferedNft)
 
@@ -1777,6 +1906,19 @@ func ProposeSwap(payload *string) *string {
 	setSwapField(id, "tt", p.TopUpToken)
 	setSwapField(id, "act", "1")
 	setSwapUint64(id, "exp", p.ExpirationBlock)
+	// Lock fee + royalty for the offered collection at propose time, so a
+	// later admin/owner change cannot retroactively shift payouts. Royalty
+	// applies on the top-up only (the barter sides aren't priced).
+	lockedFeeBps := getEffectiveFeeBps(p.OfferedNft)
+	lockedRoyaltyBps := getRoyaltyBps(p.OfferedNft)
+	if lockedFeeBps+lockedRoyaltyBps > 10000 {
+		sdk.Abort("Combined fee and royalty exceed 100%")
+	}
+	setSwapUint64(id, "fb", lockedFeeBps)
+	setSwapUint64(id, "rb", lockedRoyaltyBps)
+	setSwapField(id, "rr", getRoyaltyRecipient(p.OfferedNft))
+	swapSnapRecips, swapSnapBps := resolveRoyaltySplits(p.OfferedNft)
+	snapshotRoyaltySplitsForSwap(id, swapSnapRecips, swapSnapBps)
 	setNextSwapId(id + 1)
 
 	emitSwapProposed(id, caller, p.OfferedNft, p.WantedNft)
@@ -1847,15 +1989,50 @@ func AcceptSwap(payload *string) *string {
 		sdk.Abort("Insufficient NFT balance")
 	}
 
-	// TopUp escrow + fee distribution (order: escrow+pay, then both NFT legs)
-	// Any abort reverts the whole tx → atomic
+	// CEI: flip act=0 BEFORE any external call. A malicious topUpToken
+	// or either malicious NFT contract on the legs could re-enter
+	// AcceptSwap; with act=0 set up front, the inner re-entry aborts at
+	// the isSwapActive check and the tx remains single-execution.
+	setSwapField(p.SwapId, "act", "0")
+
+	// TopUp escrow + fee + royalty distribution. Both fee bps and the
+	// royalty recipient list are read from the snapshot taken at propose
+	// time so that mid-flow admin/owner changes can't retroactively
+	// shift the proposer's payout. Royalty applies to the top-up — the
+	// barter sides aren't priced, so trading-as-swap-with-cash no longer
+	// bypasses creator royalty.
+	// Any abort reverts the whole tx → atomic.
 	if !mIsZero(tu) {
 		received := escrowIn(tt, proposer, tu)
-		// fee using effective fee bps for offered NFT collection; nil,nil → no royalty on barter
-		fee, _, acceptorPay := feeAndRoyaltyOf(received, getEffectiveFeeBps(on), nil, nil)
+		lockedFeeBps := getSwapUint64(p.SwapId, "fb")
+		lockedRoyaltyBps := getSwapUint64(p.SwapId, "rb")
+		royaltyRecipient := getSwapField(p.SwapId, "rr")
+		// Legacy fallback: pre-snapshot swaps (proposed before this patch)
+		// have fb=0, rb=0, rr="" — the snapshot loader would then return
+		// empty slices, charging zero fee and zero royalty. That's a
+		// silent fee/royalty bypass on in-flight pre-patch swaps. Detect
+		// and re-derive from live config in that case.
+		legacy := getSwapUint64(p.SwapId, "rs_n") == 0 && lockedFeeBps == 0 && lockedRoyaltyBps == 0 && royaltyRecipient == ""
+		if legacy {
+			lockedFeeBps = getEffectiveFeeBps(on)
+			lockedRoyaltyBps = getRoyaltyBps(on)
+			royaltyRecipient = getRoyaltyRecipient(on)
+		}
+		swapSnapRecips, swapSnapBps := loadSwapRoyaltySplitSnapshot(p.SwapId, royaltyRecipient, lockedRoyaltyBps)
+		if legacy {
+			// loadSwapRoyaltySplitSnapshot returns the legacy single-entry
+			// fallback when rs_n==0 — but only if fallbackBps>0 && fallbackRecip!=""
+			// (which we've just sourced from live state). If a multi-split
+			// resolves on the collection, prefer that.
+			if mres, mbps := resolveRoyaltySplits(on); len(mres) > 0 {
+				swapSnapRecips, swapSnapBps = mres, mbps
+			}
+		}
+		fee, _, acceptorPay := feeAndRoyaltyOf(received, lockedFeeBps, swapSnapRecips, swapSnapBps)
 		if !mIsZero(fee) {
 			tokenTransferBig(tt, getFeeRecipient(), fee)
 		}
+		distributeRoyaltySplitsResolved(tt, received, swapSnapRecips, swapSnapBps)
 		if !mIsZero(acceptorPay) {
 			tokenTransferBig(tt, acceptor, acceptorPay)
 		}
@@ -1865,7 +2042,6 @@ func AcceptSwap(payload *string) *string {
 	nftSafeTransferFrom(on, proposer, acceptor, oti, oa)
 	nftSafeTransferFrom(wn, acceptor, proposer, wti, wa)
 
-	setSwapField(p.SwapId, "act", "0")
 	emitSwapAccepted(p.SwapId, proposer, acceptor)
 	return jsonResponse(&SuccessResponse{Success: true})
 }
@@ -2049,6 +2225,7 @@ func ListRental(payload *string) *string {
 	if p.Amount == 0 {
 		sdk.Abort("Amount must be greater than zero")
 	}
+	assertValidTokenId(p.TokenId)
 
 	ppb := parseMoney(p.PricePerBlock)
 	if mIsZero(ppb) {
@@ -2062,8 +2239,11 @@ func ListRental(payload *string) *string {
 	assertPaymentTokenAllowed(p.PaymentToken)
 	assertCollectionAllowed(p.NftContract)
 
+	// Rentals escrow the NFT into the market at `rent` time; the market is
+	// not the collection owner, so it could never return a soulbound NFT to
+	// the owner at endRental (stranding it). Block soulbound unconditionally.
 	if nftIsSoulbound(p.NftContract, p.TokenId) {
-		sdk.Abort("Cannot list soulbound tokens")
+		sdk.Abort("Cannot rent out soulbound tokens (rentals escrow to the market, which can't transfer them back out)")
 	}
 
 	contractAddr := getContractAddress()
@@ -2155,6 +2335,20 @@ func Rent(payload *string) *string {
 	royaltyRecipient := getRentalField(p.RentalId, "rr")
 
 	cost := mMulU64(getRentalMoney(p.RentalId, "ppb"), p.Blocks)
+
+	// CEI (F5 template): flip `rented`/`rby`/`until` + the `ract|` index
+	// BEFORE any external call. Inner re-entry through a malicious
+	// whitelisted paymentToken's transferFrom callback would otherwise
+	// see rented=0 and run a second concurrent rental on the same row;
+	// outer's stale local would then overwrite. This ordering plus
+	// tx-revert-on-abort closes the window.
+	until := getCurrentBlockHeight() + p.Blocks
+	setRentalField(p.RentalId, "rby", renter)
+	setRentalUint64(p.RentalId, "until", until)
+	setRentalField(p.RentalId, "rented", "1")
+	// Index: ract|<nc>|<ti>|<renter> = until
+	setUint64State("ract|"+nc+"|"+ti+"|"+renter, until)
+
 	received := escrowIn(pt, renter, cost)
 
 	// Escrow NFT from owner into market contract.
@@ -2172,14 +2366,6 @@ func Rent(payload *string) *string {
 	if !mIsZero(ownerPay) {
 		tokenTransferBig(pt, owner, ownerPay)
 	}
-
-	until := getCurrentBlockHeight() + p.Blocks
-	setRentalField(p.RentalId, "rby", renter)
-	setRentalUint64(p.RentalId, "until", until)
-	setRentalField(p.RentalId, "rented", "1")
-
-	// Index: ract|<nc>|<ti>|<renter> = until
-	setUint64State("ract|"+nc+"|"+ti+"|"+renter, until)
 
 	emitRented(p.RentalId, renter, until)
 	return jsonResponse(&SuccessResponse{Success: true})
@@ -2217,14 +2403,16 @@ func EndRental(payload *string) *string {
 	prevRenter := getRentalField(p.RentalId, "rby")
 	contractAddr := getContractAddress()
 
-	// Return escrowed NFT from market to owner.
-	nftSafeTransferFrom(nc, contractAddr, owner, ti, amt)
-
+	// CEI: clear `rented`/`rby` + index BEFORE the NFT return so a
+	// re-entry through a malicious nftContract cannot re-enter EndRental
+	// and trigger a second `nftSafeTransferFrom` (and corrupt the rental
+	// row by overwriting it with stale locals).
 	setRentalField(p.RentalId, "rented", "0")
 	setRentalField(p.RentalId, "rby", "")
-
-	// Delete active rental index.
 	sdk.StateDeleteObject("ract|" + nc + "|" + ti + "|" + prevRenter)
+
+	// Return escrowed NFT from market to owner.
+	nftSafeTransferFrom(nc, contractAddr, owner, ti, amt)
 
 	emitRentalEnded(p.RentalId, getCaller())
 	return jsonResponse(&SuccessResponse{Success: true})
@@ -2261,14 +2449,13 @@ func EndRentalEarly(payload *string) *string {
 	owner := getRentalField(p.RentalId, "o")
 	contractAddr := getContractAddress()
 
-	// Return escrowed NFT from market to owner. No refund of unused term.
-	nftSafeTransferFrom(nc, contractAddr, owner, ti, amt)
-
+	// CEI: clear `rented`/`rby` + index BEFORE the NFT return.
 	setRentalField(p.RentalId, "rented", "0")
 	setRentalField(p.RentalId, "rby", "")
-
-	// Delete active rental index.
 	sdk.StateDeleteObject("ract|" + nc + "|" + ti + "|" + caller)
+
+	// Return escrowed NFT from market to owner. No refund of unused term.
+	nftSafeTransferFrom(nc, contractAddr, owner, ti, amt)
 
 	emitRentalEnded(p.RentalId, caller)
 	return jsonResponse(&SuccessResponse{Success: true})
@@ -2405,14 +2592,9 @@ func ListMintSpots(payload *string) *string {
 	assertPaymentTokenAllowed(pt)
 	assertCollectionAllowed(nc)
 
-	// F1/F2 allowlist: tokenId is concatenated into the delegated-mint JSON payload.
-	for i := 0; i < len(ti); i++ {
-		c := ti[i]
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-			(c >= '0' && c <= '9') || c == ':' || c == '-') {
-			sdk.Abort("tokenId contains invalid characters")
-		}
-	}
+	// tokenId is concatenated into the delegated-mint JSON payload — apply
+	// the shared validator (same gate now used at every entrypoint).
+	assertValidTokenId(ti)
 
 	if nftGetOwner(nc) != caller {
 		sdk.Abort("Only collection owner can list mint spots")
@@ -2510,13 +2692,28 @@ func BuyMintSpot(payload *string) *string {
 
 	ms := getMintSpotUint64(id, "ms")
 	sold := getMintSpotUint64(id, "sold")
-	if ms != 0 && sold+p.Amount > ms {
+	// Overflow-safe cap check: `sold+p.Amount` would wrap for a huge p.Amount
+	// and bypass the cap. The invariant sold ≤ ms holds (the listing closes at
+	// sold==ms below), so ms-sold ≥ 0 and this form can't overflow.
+	if ms != 0 && p.Amount > ms-sold {
 		sdk.Abort("Exceeds listing mint-spot cap")
 	}
 
 	pt := getMintSpotField(id, "pt")
 	price := getMintSpotMoney(id, "p")
 	total := mMulU64(price, p.Amount)
+
+	// CEI (F5 template): increment `sold`/flip `act` BEFORE any external
+	// call (including `escrowIn`). Inner re-entry through a malicious
+	// whitelisted paymentToken's transferFrom callback would otherwise
+	// see the old `sold` and mint past the cap; outer's stale local
+	// would then overwrite. This ordering plus tx-revert-on-abort closes
+	// the window.
+	newSold := sold + p.Amount
+	setMintSpotUint64(id, "sold", newSold)
+	if ms != 0 && newSold == ms {
+		setMintSpotField(id, "act", "0")
+	}
 
 	received := escrowIn(pt, buyer, total)
 	fee, _, creatorPay := feeAndRoyaltyOf(received, getMintSpotUint64(id, "fb"), nil, nil)
@@ -2532,12 +2729,6 @@ func BuyMintSpot(payload *string) *string {
 	}
 	if !mIsZero(creatorPay) {
 		tokenTransferBig(pt, lister, creatorPay)
-	}
-
-	newSold := sold + p.Amount
-	setMintSpotUint64(id, "sold", newSold)
-	if ms != 0 && newSold == ms {
-		setMintSpotField(id, "act", "0")
 	}
 
 	emitMintSpotBought(id, buyer, p.Amount, formatMoney(received), formatMoney(fee))

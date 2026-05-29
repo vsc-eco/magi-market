@@ -984,6 +984,8 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract13(in *jlexer.Lexer, out *PaymentT
 		switch key {
 		case "token":
 			out.Token = string(in.String())
+		case "decoder":
+			out.Decoder = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -4594,6 +4596,8 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract56(in *jlexer.Lexer, out *BuyPaylo
 			out.ListingId = uint64(in.Uint64())
 		case "amount":
 			out.Amount = uint64(in.Uint64())
+		case "maxTotalPrice":
+			out.MaxTotalPrice = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -4617,6 +4621,11 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract56(out *jwriter.Writer, in BuyPayl
 		const prefix string = ",\"amount\":"
 		out.RawString(prefix)
 		out.Uint64(uint64(in.Amount))
+	}
+	{
+		const prefix string = ",\"maxTotalPrice\":"
+		out.RawString(prefix)
+		out.String(in.MaxTotalPrice)
 	}
 	out.RawByte('}')
 }
@@ -7127,6 +7136,37 @@ func tinyjsonC3EncodeBundleDelistedEvent(out *jwriter.Writer, in BundleDelistedE
 
 func (v BundleDelistedEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonC3EncodeBundleDelistedEvent(w, v)
+}
+
+// PaymentTokenEvent encode (hand-added: payment-token whitelist events)
+func tinyjsonPTEncodePaymentTokenEvent(out *jwriter.Writer, in PaymentTokenEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"token\":"
+			out.RawString(p2[1:])
+			out.String(string(in.Attributes.Token))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v PaymentTokenEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonPTEncodePaymentTokenEvent(w, v)
 }
 
 // ---- hand-added (sub-project D1): NFT-for-NFT swap structs ----

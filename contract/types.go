@@ -35,6 +35,10 @@ type DelistPayload struct {
 type BuyPayload struct {
 	ListingId uint64 `json:"listingId"`
 	Amount    uint64 `json:"amount"`
+	// Optional slippage guard. When non-empty, the buy aborts if the
+	// computed `pricePerUnit * amount` exceeds this. Mirrors the same
+	// field on SweepPayload. Empty/"" disables the check for back-compat.
+	MaxTotalPrice string `json:"maxTotalPrice"`
 }
 
 type UpdateListingPayload struct {
@@ -127,6 +131,11 @@ type SetMinOfferPayload struct {
 
 type PaymentTokenPayload struct {
 	Token string `json:"token"`
+	// Optional balance-decoder type: "magi_token" | "utxo" | "native".
+	// Binds the token to a known raw-state layout so tokenBalanceOf reads
+	// the right key/encoding instead of probing. Omitted = "auto" (legacy
+	// probe) for back-compat.
+	Decoder string `json:"decoder"`
 }
 
 type EmergencyWithdrawPayload struct {
@@ -360,6 +369,19 @@ type DelistedEvent struct {
 type DelistedAttributes struct {
 	ListingId uint64 `json:"listingId"`
 	Seller    string `json:"seller"`
+}
+
+// PaymentTokenEvent is emitted by addPaymentToken/removePaymentToken so the
+// indexer can fold the current whitelist set (Type is "payment_token_added"
+// or "payment_token_removed"). One struct, two type strings.
+type PaymentTokenEvent struct {
+	Type       string                      `json:"type"`
+	Attributes PaymentTokenEventAttributes `json:"attributes"`
+	Tx         string                      `json:"tx"`
+}
+
+type PaymentTokenEventAttributes struct {
+	Token string `json:"token"`
 }
 
 type BoughtEvent struct {

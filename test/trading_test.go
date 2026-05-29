@@ -456,6 +456,45 @@ func TestBundleDeniedCollectionBlocked(t *testing.T) {
 	CallMarket(t, ct, "buyBundle", []byte(buyPayload), nil, buyer, "", false, gas, "Collection is denied")
 }
 
+// TestBundleSoulboundOwnerAllowed verifies the collection owner CAN bundle their
+// own soulbound editions (bundles don't escrow; the buy-time transfer is
+// owner→buyer, which magi_nft permits when from==ownerAddr).
+func TestBundleSoulboundOwnerAllowed(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+
+	// One soulbound + one regular edition, both held by the collection owner.
+	CallNft(t, ct, "mint", []byte(`{"to":"hive:tibfox","id":"sb1","amount":1,"maxSupply":1,"soulbound":true}`), nil, ownerAddress, true, gas, "")
+	MintNft(t, ct, seller, "reg1", 1, 10)
+	ApproveNftForMarket(t, ct, seller)
+
+	items := bundleItemsJSON([][2]string{{"sb1", "1"}, {"reg1", "1"}})
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","items":%s,"paymentToken":"%s","price":"2000","expirationBlock":0}`,
+		NftContractID, items, TokenID)
+	CallMarket(t, ct, "listBundle", []byte(listPayload), nil, seller, "", true, gas, "")
+}
+
+// TestBundleSoulboundNonOwnerBlocked verifies a non-owner holder CANNOT bundle a
+// soulbound token (the owner→buyer leg would never succeed for them).
+func TestBundleSoulboundNonOwnerBlocked(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := "hive:buyer"
+
+	// Soulbound minted directly to the non-owner, plus a regular edition.
+	CallNft(t, ct, "mint", []byte(`{"to":"hive:buyer","id":"sb1","amount":1,"maxSupply":1,"soulbound":true}`), nil, ownerAddress, true, gas, "")
+	CallNft(t, ct, "mint", []byte(`{"to":"hive:buyer","id":"reg1","amount":1,"maxSupply":10}`), nil, ownerAddress, true, gas, "")
+	ApproveNftForMarket(t, ct, seller)
+
+	items := bundleItemsJSON([][2]string{{"sb1", "1"}, {"reg1", "1"}})
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","items":%s,"paymentToken":"%s","price":"2000","expirationBlock":0}`,
+		NftContractID, items, TokenID)
+	CallMarket(t, ct, "listBundle", []byte(listPayload), nil, seller, "", false, gas, "Cannot list soulbound tokens")
+}
+
 // TestFloorSweepRejectsForeignCollection verifies that including a listing from
 // a different NFT collection aborts the entire sweep.
 func TestFloorSweepRejectsForeignCollection(t *testing.T) {

@@ -185,6 +185,19 @@ func doBuyToken(caller string, p *BuyTokenPayload) {
 	feeBps := getTokenListingUint64(p.ListingId, "fb")
 
 	total := mMul(price, buyAmt)
+
+	// CEI: decrement remaining + flip active BEFORE the external calls.
+	// Mirrors doBuy's fix — a malicious paymentToken's transferFrom
+	// callback or a malicious tokenContract's transferFrom callback can
+	// re-enter doBuyToken; without this ordering the outer's stale local
+	// `remaining` would overwrite the inner's decrement and the listing's
+	// `a` would silently drift, allowing over-sell / phantom inventory.
+	newRemaining := mSub(remaining, buyAmt)
+	setTokenListingMoney(p.ListingId, "a", newRemaining)
+	if mIsZero(newRemaining) {
+		setTokenListingField(p.ListingId, "act", "0")
+	}
+
 	received := escrowIn(paymentToken, caller, total)
 
 	// Fee only — tokens have no collection/royalty.
@@ -200,12 +213,6 @@ func doBuyToken(caller string, p *BuyTokenPayload) {
 	}
 	if !mIsZero(sellerPayment) {
 		tokenTransferBig(paymentToken, seller, sellerPayment)
-	}
-
-	newRemaining := mSub(remaining, buyAmt)
-	setTokenListingMoney(p.ListingId, "a", newRemaining)
-	if mIsZero(newRemaining) {
-		setTokenListingField(p.ListingId, "act", "0")
 	}
 
 	emitTokenEvent("token_bought",

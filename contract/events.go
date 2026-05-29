@@ -50,6 +50,21 @@ func emitDelisted(listingId uint64, seller string) {
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
+// emitPaymentToken logs a whitelist add/remove so the indexer can fold the
+// current payment-token set. eventType is "payment_token_added" or
+// "payment_token_removed".
+func emitPaymentToken(eventType, token string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := PaymentTokenEvent{
+		Type:       eventType,
+		Attributes: PaymentTokenEventAttributes{Token: token},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
 func emitBought(listingId uint64, buyer string, amount uint64, totalPrice, fee, royalty string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BoughtEvent{

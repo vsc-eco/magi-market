@@ -38,6 +38,7 @@ func CreateAuction(payload *string) *string {
 	if p.Amount == 0 {
 		sdk.Abort("Amount must be greater than zero")
 	}
+	assertValidTokenId(p.TokenId)
 	if p.AuctionType != "english" && p.AuctionType != "dutch" {
 		sdk.Abort("Auction type must be 'english' or 'dutch'")
 	}
@@ -76,9 +77,12 @@ func CreateAuction(payload *string) *string {
 		}
 	}
 
-	// Check NFT is not soulbound
+	// Auctions escrow the NFT into the market, which is NOT the collection
+	// owner — so the market could never transfer a soulbound NFT back out
+	// (to the winner, or back to the seller on no-sale/cancel), permanently
+	// stranding it. Block soulbound unconditionally, even for the owner.
 	if nftIsSoulbound(p.NftContract, p.TokenId) {
-		sdk.Abort("Cannot auction soulbound tokens")
+		sdk.Abort("Cannot auction soulbound tokens (auctions escrow to the market, which can't transfer them back out)")
 	}
 	assertCollectionAllowed(p.NftContract)
 
@@ -188,9 +192,12 @@ func PlaceBid(payload *string) *string {
 			sdk.Abort("Bid must exceed current high bid")
 		}
 
-		// Enforce minimum bid increment if configured
-		minIncBps := getMinBidIncrementBps()
-		if minIncBps > 0 && !mIsZero(currentHighBid) {
+		// Enforce minimum bid increment. effectiveMinBidIncrementBps floors at
+		// 1% when unset, so this always applies once there's a high bid —
+		// closing the anti-snipe indefinite-extension grief that a 0 increment
+		// (the un-set default) would otherwise allow.
+		minIncBps := effectiveMinBidIncrementBps()
+		if !mIsZero(currentHighBid) {
 			minBid := mAdd(currentHighBid, mMulBpsDiv(currentHighBid, minIncBps))
 			if mCmp(bid, minBid) < 0 {
 				sdk.Abort("Bid must exceed current high bid by minimum increment")
@@ -202,15 +209,20 @@ func PlaceBid(payload *string) *string {
 		// credit only what actually arrived.
 		received := escrowIn(paymentToken, caller, bid)
 
-		// Refund previous high bidder (after new bid is secured).
-		// Read the PREVIOUS stored high bid before overwriting it.
+		// Read prev high bidder/bid from STATE *after* escrowIn — if the
+		// paymentToken's transferFrom callback re-entered placeBid, the
+		// state now reflects the inner-call's bidder (whose deposit our
+		// outer-call's higher bid is supplanting); refunding from that
+		// state is the only correct path. Reading a local snapshot from
+		// before escrowIn would either double-refund the original prev
+		// bidder (if the local was captured pre-escrowIn) or refund the
+		// wrong amount (if the local was captured post-escrowIn).
 		prevHighBidder := getAuctionField(p.AuctionId, "hb")
-		prevHighBid := currentHighBid
-		if prevHighBidder != "" && !mIsZero(prevHighBid) {
-			tokenTransferBig(paymentToken, prevHighBidder, prevHighBid)
-		}
+		prevHighBid := getAuctionMoney(p.AuctionId, "ha")
 
-		// Update auction state
+		// Checks-Effects-Interactions: commit the new hb/ha BEFORE the
+		// refund external call so a re-entry through the paymentToken's
+		// `transfer` hook can't see stale state.
 		setAuctionField(p.AuctionId, "hb", caller)
 		// Stored high bid is the ACTUAL escrowed amount (received), not the
 		// nominal bid. Reserve/min-increment guards above intentionally compare
@@ -218,6 +230,11 @@ func PlaceBid(payload *string) *string {
 		// state equal to funds the contract truly holds. Do not "simplify" this
 		// to store the nominal bid.
 		setAuctionMoney(p.AuctionId, "ha", received)
+
+		// Refund whoever's deposit was supplanted (read from state above).
+		if prevHighBidder != "" && !mIsZero(prevHighBid) {
+			tokenTransferBig(paymentToken, prevHighBidder, prevHighBid)
+		}
 
 		// Anti-snipe: extend endBlock if bid is placed near the end
 		antiSnipeBlocks := getAntiSnipeBlocks()
@@ -339,12 +356,18 @@ func SettleAuction(payload *string) *string {
 	highBid := getAuctionMoney(p.AuctionId, "ha")
 	contractAddr := getContractAddress()
 
+	// CEI: flip stl=1 and act=0 BEFORE any external call. A malicious
+	// nftContract (seller-controlled at create time) would otherwise
+	// re-enter settleAuction via its safeTransferFrom callback; the inner
+	// re-entry sees act=1,stl=0, runs the full payout flow, and the outer
+	// continuation then pays AGAIN — draining the pool by one highBid.
+	// All three branches below must commit the flip first.
 	if isCollectionDenied(nftContract) {
 		// Collection denied mid-auction: treat as no-sale. Return the
 		// escrowed NFT to the seller and refund the high bidder (if any).
-		nftSafeTransferFrom(nftContract, contractAddr, seller, tokenId, amount)
 		setAuctionField(p.AuctionId, "stl", "1")
 		setAuctionField(p.AuctionId, "act", "0")
+		nftSafeTransferFrom(nftContract, contractAddr, seller, tokenId, amount)
 		if highBidder != "" && !mIsZero(highBid) {
 			tokenTransferBig(paymentToken, highBidder, highBid)
 		}
@@ -354,20 +377,19 @@ func SettleAuction(payload *string) *string {
 
 	if highBidder == "" || mIsZero(highBid) {
 		// No bids - return NFT to seller
-		nftSafeTransferFrom(nftContract, contractAddr, seller, tokenId, amount)
-
-		// Mark settled after successful NFT transfer
 		setAuctionField(p.AuctionId, "stl", "1")
 		setAuctionField(p.AuctionId, "act", "0")
+		nftSafeTransferFrom(nftContract, contractAddr, seller, tokenId, amount)
 
 		emitAuctionSettled(p.AuctionId, "", "0", "0", "0")
 	} else {
-		// Transfer NFT to winner first (before distributing payments)
-		nftSafeTransferFrom(nftContract, contractAddr, highBidder, tokenId, amount)
-
-		// Mark settled after successful NFT transfer (prevents double-settlement)
+		// Mark settled BEFORE the NFT transfer + payouts so a re-entry
+		// through the seller-controlled nftContract sees stl=1 and aborts.
 		setAuctionField(p.AuctionId, "stl", "1")
 		setAuctionField(p.AuctionId, "act", "0")
+
+		// Transfer NFT to winner first (before distributing payments)
+		nftSafeTransferFrom(nftContract, contractAddr, highBidder, tokenId, amount)
 
 		// Distribute payment
 		lockedFeeBps := getAuctionUint64(p.AuctionId, "fb")
@@ -432,14 +454,18 @@ func CancelAuction(payload *string) *string {
 		}
 	}
 
-	// Return escrowed NFT to seller
+	// CEI: flip act=0 BEFORE the NFT return. The caller-equality check
+	// above already blocks inner re-entry from a malicious nftContract
+	// (inner caller != seller), but committing state first keeps the
+	// invariant uniform with the other entrypoints and rules out any
+	// future bypass.
 	nftContract := getAuctionField(p.AuctionId, "nc")
 	tokenId := getAuctionField(p.AuctionId, "ti")
 	amount := getAuctionUint64(p.AuctionId, "a")
 	contractAddr := getContractAddress()
+	setAuctionField(p.AuctionId, "act", "0")
 	nftSafeTransferFrom(nftContract, contractAddr, seller, tokenId, amount)
 
-	setAuctionField(p.AuctionId, "act", "0")
 	emitAuctionCancelled(p.AuctionId, seller)
 	return jsonResponse(&SuccessResponse{Success: true})
 }
