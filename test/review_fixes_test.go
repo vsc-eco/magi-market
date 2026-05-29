@@ -475,14 +475,16 @@ func TestRoyaltyUpdateDoesNotAffectExistingOffers(t *testing.T) {
 // Emergency withdraw edge case
 // ===================================
 
-func TestEmergencyWithdrawNftMissingTokenId(t *testing.T) {
+// Post-C1: the NFT branch of emergencyWithdraw is disabled regardless of
+// payload completeness (no per-field validation reached).
+func TestEmergencyWithdrawNftDisabledRegardlessOfPayload(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
 
 	withdrawPayload := fmt.Sprintf(`{"tokenType":"nft","contract":"%s","tokenId":"","amount":"5","to":"hive:rescue"}`, NftContractID)
-	CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, ownerAddress, "", false, gas, "Token ID required for NFT withdraw")
+	CallMarket(t, ct, "emergencyWithdraw", []byte(withdrawPayload), nil, ownerAddress, "", false, gas, "Emergency NFT withdraw disabled")
 }
 
 // ===================================
@@ -520,10 +522,10 @@ func TestPlaceBidWhenPaused(t *testing.T) {
 }
 
 // ===================================
-// Settle not blocked by pause (anyone should be able to settle)
+// Settle is pause-gated (post-M3)
 // ===================================
 
-func TestSettleAuctionNotBlockedByPause(t *testing.T) {
+func TestSettleAuctionGatedByPause(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 	MintNft(t, ct, ownerAddress, "1", 1, 1)
@@ -538,15 +540,15 @@ func TestSettleAuctionNotBlockedByPause(t *testing.T) {
 	ct.BlockHeight = 150
 	CallMarket(t, ct, "placeBid", []byte(`{"auctionId":0,"bidAmount":"2000"}`), nil, bidder, "", true, gas, "")
 
-	// Pause contract
 	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
 
-	// Settle should still work (settleAuction doesn't assertNotPaused)
 	ct.BlockHeight = 201
+	// Post-M3 fix: settle is now pause-gated for symmetry with the rest of
+	// the value-mover surface. The auction settles after `unpause`.
+	CallMarket(t, ct, "settleAuction", []byte(`{"auctionId":0}`), nil, "hive:anyone", "", false, gas, "Contract is paused")
+	CallMarket(t, ct, "unpause", nil, nil, ownerAddress, "", true, gas, "")
 	CallMarket(t, ct, "settleAuction", []byte(`{"auctionId":0}`), nil, "hive:anyone", "", true, gas, "")
-
-	winnerNft := QueryNftBalance(t, ct, bidder, "1")
-	assert.Equal(t, uint64(1), winnerNft)
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, bidder, "1"))
 }
 
 // ===================================

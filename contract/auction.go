@@ -164,6 +164,9 @@ func PlaceBid(payload *string) *string {
 	}
 
 	paymentToken := getAuctionField(p.AuctionId, "pt")
+	// Re-validate the auction's payment token at bid-time so a token
+	// removed from the whitelist post-listing cannot mediate new bids.
+	assertPaymentTokenAllowed(paymentToken)
 	nftContract := getAuctionField(p.AuctionId, "nc")
 	assertCollectionAllowed(nftContract)
 	contractAddr := getContractAddress()
@@ -220,6 +223,20 @@ func PlaceBid(payload *string) *string {
 		prevHighBidder := getAuctionField(p.AuctionId, "hb")
 		prevHighBid := getAuctionMoney(p.AuctionId, "ha")
 
+		// Sanity: the new credit must strictly exceed the prev high bid
+		// we are about to refund. Without this, a paymentToken whose
+		// `transferFrom` under-delivers (mislabeled-magi_token decoder,
+		// fee-on-transfer token, utxo deduct_fee crossing the existing
+		// high water-mark, etc.) lets `bid > prevHighBid+minInc` pass
+		// the comparison guards above while `received <= prevHighBid` —
+		// the refund below would then pay out `prevHighBid` from a
+		// smaller credit, draining the pool by `prevHighBid - received`
+		// on every supplanting bid. When there is no prior high bid,
+		// any non-zero `received` is fine.
+		if !mIsZero(prevHighBid) && mCmp(received, prevHighBid) <= 0 {
+			sdk.Abort("Escrowed bid does not cover the refund of the previous high bid")
+		}
+
 		// Checks-Effects-Interactions: commit the new hb/ha BEFORE the
 		// refund external call so a re-entry through the paymentToken's
 		// `transfer` hook can't see stale state.
@@ -269,6 +286,20 @@ func PlaceBid(payload *string) *string {
 			sdk.Abort("Bid must be at least the current total price")
 		}
 
+		// CEI: flip stl=1 / act=0 BEFORE any external call so a re-entry
+		// through the paymentToken's `transferFrom` callback hits the
+		// `isAuctionSettled` gate at the top of placeBid and aborts.
+		// Without this, a malicious whitelisted paymentToken can re-enter
+		// during `escrowIn` (state still active), let the inner call also
+		// transfer this auction's NFT (and, if the market holds the same
+		// (nc,ti) for another auction's escrow, drain that one too), and
+		// settle twice. `hb` is set here to the caller; `ha` is rewritten
+		// post-escrow to the actual `received` for accurate accounting.
+		setAuctionField(p.AuctionId, "hb", caller)
+		setAuctionMoney(p.AuctionId, "ha", totalPrice)
+		setAuctionField(p.AuctionId, "stl", "1")
+		setAuctionField(p.AuctionId, "act", "0")
+
 		// The buyer is only ever charged totalPrice (the current Dutch price);
 		// the declared bid is used solely as the pre-escrow lower-bound guard
 		// above. Any excess the buyer declared is never pulled.
@@ -278,16 +309,13 @@ func PlaceBid(payload *string) *string {
 		if mCmp(received, totalPrice) < 0 {
 			sdk.Abort("Bid must be at least the current total price")
 		}
+		// Overwrite ha with the actual escrowed amount (mirrors the
+		// English branch's "store received, not nominal" rule).
+		setAuctionMoney(p.AuctionId, "ha", received)
 
-		// Transfer NFT to buyer first (before distributing payments)
+		// Transfer NFT to buyer (state is already settled; re-entry is blocked).
 		tokenId := getAuctionField(p.AuctionId, "ti")
 		nftSafeTransferFrom(nftContract, contractAddr, caller, tokenId, amount)
-
-		// Mark settled
-		setAuctionField(p.AuctionId, "hb", caller)
-		setAuctionMoney(p.AuctionId, "ha", received)
-		setAuctionField(p.AuctionId, "stl", "1")
-		setAuctionField(p.AuctionId, "act", "0")
 
 		// Distribute payment
 		lockedFeeBps := getAuctionUint64(p.AuctionId, "fb")
@@ -317,6 +345,7 @@ func PlaceBid(payload *string) *string {
 //go:wasmexport settleAuction
 func SettleAuction(payload *string) *string {
 	assertInit()
+	assertNotPaused()
 
 	if payload == nil || *payload == "" {
 		sdk.Abort("Payload required")
@@ -352,6 +381,9 @@ func SettleAuction(payload *string) *string {
 	tokenId := getAuctionField(p.AuctionId, "ti")
 	amount := getAuctionUint64(p.AuctionId, "a")
 	paymentToken := getAuctionField(p.AuctionId, "pt")
+	// Re-validate at settle-time: a payment token removed from the
+	// whitelist post-bid should not continue to mediate the payout.
+	assertPaymentTokenAllowed(paymentToken)
 	highBidder := getAuctionField(p.AuctionId, "hb")
 	highBid := getAuctionMoney(p.AuctionId, "ha")
 	contractAddr := getContractAddress()

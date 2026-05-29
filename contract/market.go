@@ -294,6 +294,10 @@ func doBuy(caller string, p *BuyPayload) {
 		sdk.Abort("Seller cannot buy own listing")
 	}
 	paymentToken := getListingField(p.ListingId, "pt")
+	// Re-validate the listing's payment token at buy-time. If the owner
+	// has since removed the token from the whitelist (e.g. it turned out
+	// to misbehave), in-flight listings using it are halted.
+	assertPaymentTokenAllowed(paymentToken)
 	pricePerUnit := getListingMoney(p.ListingId, "p")
 	nftContract := getListingField(p.ListingId, "nc")
 	assertCollectionAllowed(nftContract)
@@ -586,6 +590,10 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 	offerAmount := getOfferUint64(offerId, "a")
 	pricePerUnit := getOfferMoney(offerId, "p")
 	paymentToken := getOfferField(offerId, "pt")
+	// Re-validate at accept-time (de-whitelisted-after-offer halt).
+	// `cancelOffer` deliberately skips this — buyers must always be able
+	// to reclaim their escrow even after the token is removed.
+	assertPaymentTokenAllowed(paymentToken)
 	lockedFeeBps := getOfferUint64(offerId, "fb")
 	lockedRoyaltyBps := getOfferUint64(offerId, "rb")
 	royaltyRecipient := getOfferField(offerId, "rr")
@@ -659,7 +667,7 @@ func doAcceptOffer(caller string, offerId uint64, acceptAmount uint64, tokenId s
 //go:wasmexport acceptOffer
 func AcceptOffer(payload *string) *string {
 	assertInit()
-	// Note: acceptOffer works even when paused so sellers can finalize existing offers
+	assertNotPaused()
 
 	caller := getCaller()
 
@@ -687,7 +695,7 @@ func AcceptOffer(payload *string) *string {
 //go:wasmexport acceptCollectionOffer
 func AcceptCollectionOffer(payload *string) *string {
 	assertInit()
-	// Note: acceptCollectionOffer works even when paused so sellers can finalize existing offers
+	assertNotPaused()
 
 	caller := getCaller()
 
@@ -799,6 +807,7 @@ func ChangeOwner(payload *string) *string {
 	if p.NewOwner == "" {
 		sdk.Abort("New owner address required")
 	}
+	assertValidAccount(p.NewOwner)
 
 	// 2-step: propose only. Ownership does not move until the proposed
 	// owner calls acceptOwnership. Re-calling overwrites the candidate.
@@ -978,6 +987,13 @@ func SetRoyaltySplits(payload *string) *string {
 		if split.Bps == 0 {
 			sdk.Abort("Royalty split bps must be > 0")
 		}
+		// Per-split cap of 5000 (== global cap) — also closes the
+		// uint64-overflow door on the accumulator: 10 splits * 5000 =
+		// 50_000 << 2^64, so totalBps can never wrap before the
+		// post-loop check.
+		if split.Bps > 5000 {
+			sdk.Abort("Royalty split bps must be <= 5000")
+		}
 		if split.Recipient == "" {
 			sdk.Abort("Royalty split recipient required")
 		}
@@ -1079,6 +1095,7 @@ func AddPaymentToken(payload *string) *string {
 	if p.Token == "" {
 		sdk.Abort("Token address required")
 	}
+	assertValidAccount(p.Token)
 	// Optional balance-decoder binding. If provided it must be a known type;
 	// omitted leaves the token on legacy auto-probe.
 	if p.Decoder != "" && !isValidDecoder(p.Decoder) {
@@ -1116,6 +1133,10 @@ func RemovePaymentToken(payload *string) *string {
 	}
 
 	setPaymentTokenAllowed(p.Token, false)
+	// Clear the decoder binding too — a later re-add without a decoder
+	// (auto-probe) must not silently inherit the prior magi_token/utxo
+	// classification (avoids stale-decoder over/under-credit).
+	sdk.StateDeleteObject(paymentTokenDecoderKey(p.Token))
 	emitPaymentToken("payment_token_removed", p.Token)
 	return jsonResponse(&SuccessResponse{Success: true})
 }
@@ -1149,16 +1170,23 @@ func EmergencyWithdraw(payload *string) *string {
 	}
 	assertValidAccount(p.To)
 	if p.TokenType == "nft" {
-		if p.TokenId == "" {
-			sdk.Abort("Token ID required for NFT withdraw")
-		}
-		assertValidTokenId(p.TokenId)
-		qty := parseMoney(p.Amount)
-		if !qty.IsUint64() {
-			sdk.Abort("NFT amount too large")
-		}
-		nftSafeTransferFrom(p.Contract, getContractAddress(), p.To, p.TokenId, qty.Uint64())
+		// NFTs in the market are ALWAYS escrowed for an active entity
+		// (auction lot, rental lock, bundle lot, mint-spot delegated mint
+		// hasn't transferred until purchase). There is no legitimate "NFT
+		// dust" scenario — anyone sending an NFT here intends it for
+		// escrow. Allowing the owner to pull arbitrary NFTs out lets a
+		// compromised/rogue owner steal live escrows, which the cancel
+		// paths (still callable while paused) already cover for refunds.
+		sdk.Abort("Emergency NFT withdraw disabled; use cancel paths to release escrowed NFTs")
 	} else if p.TokenType == "token" {
+		// Block withdrawals of any currently-whitelisted payment token —
+		// those funds back active offer/auction/swap/rental/mint-spot
+		// escrows that users can still reclaim via cancel/refund paths
+		// while paused. Only non-whitelisted accidentally-sent tokens
+		// (true dust) are recoverable here.
+		if isPaymentTokenAllowedCheck(p.Contract) {
+			sdk.Abort("Cannot emergency-withdraw an active payment token; remove it from the whitelist first")
+		}
 		tokenTransferBig(p.Contract, p.To, parseMoney(p.Amount))
 	} else {
 		sdk.Abort("Token type must be 'nft' or 'token'")
@@ -1421,6 +1449,8 @@ func BuyBundle(payload *string) *string {
 	}
 
 	pt := getBundleField(p.BundleId, "pt")
+	// Re-validate at buy-time (de-whitelisted-after-list halt).
+	assertPaymentTokenAllowed(pt)
 	price := getBundleMoney(p.BundleId, "p")
 
 	// CEI (F5 template): flip `act=0` BEFORE any external call (including
@@ -2328,11 +2358,23 @@ func Rent(payload *string) *string {
 	}
 
 	pt := getRentalField(p.RentalId, "pt")
+	// Re-validate at rent-time (de-whitelisted-after-list halt).
+	assertPaymentTokenAllowed(pt)
 	ti := getRentalField(p.RentalId, "ti")
 	amt := getRentalUint64(p.RentalId, "amt")
 	lockedFeeBps := getRentalUint64(p.RentalId, "fb")
 	lockedRoyaltyBps := getRentalUint64(p.RentalId, "rb")
 	royaltyRecipient := getRentalField(p.RentalId, "rr")
+
+	// Prevent attestation-key collision: the `ract|<nc>|<ti>|<renter>`
+	// slot is single-valued. Allowing the same renter to hold two
+	// concurrent rentals on the same (collection, tokenId) — even from
+	// different owners (editioned NFTs) — would alias one row's
+	// attestation onto the other, so ending one wipes the survivor's
+	// proof-of-rental. Disallow until the prior attestation expires.
+	if existing := getUint64State("ract|" + nc + "|" + ti + "|" + renter); existing != 0 && getCurrentBlockHeight() < existing {
+		sdk.Abort("Renter already has an active rental for this token")
+	}
 
 	cost := mMulU64(getRentalMoney(p.RentalId, "ppb"), p.Blocks)
 
@@ -2374,7 +2416,10 @@ func Rent(payload *string) *string {
 //go:wasmexport endRental
 func EndRental(payload *string) *string {
 	assertInit()
-	// Works while paused — recovery path (mirrors CancelAuction).
+	assertNotPaused()
+	// Value-mover (returns escrowed NFT). Paused for symmetry with the
+	// rest of the surface; the owner can unpause once the all-clear is
+	// given and the NFT is then recoverable.
 
 	if payload == nil || *payload == "" {
 		sdk.Abort("Payload required")
@@ -2421,6 +2466,7 @@ func EndRental(payload *string) *string {
 //go:wasmexport endRentalEarly
 func EndRentalEarly(payload *string) *string {
 	assertInit()
+	assertNotPaused()
 
 	caller := getCaller()
 
