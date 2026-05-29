@@ -11,19 +11,41 @@ import (
 // Soulbound Token Tests
 // ===================================
 
-func TestListSoulboundToken(t *testing.T) {
+// TestListSoulboundTokenOwnerAllowed verifies the collection owner CAN list
+// their own soulbound editions. Listings don't escrow — the buy-time transfer
+// is seller→buyer directly — and magi_nft permits a soulbound transfer when
+// `from == ownerAddr`. So the owner-as-seller leg succeeds.
+func TestListSoulboundTokenOwnerAllowed(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
-	// Mint soulbound NFT to owner
+	// Mint soulbound NFT to the collection owner (tibfox)
 	payload := `{"to":"hive:tibfox","id":"soul1","amount":1,"maxSupply":1,"soulbound":true}`
 	CallNft(t, ct, "mint", []byte(payload), nil, ownerAddress, true, gas, "")
 
 	ApproveNftForMarket(t, ct, ownerAddress)
 
-	// Try to list soulbound token
+	// The collection owner may list their own soulbound token.
 	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"soul1","amount":1,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
-	CallMarket(t, ct, "list", []byte(listPayload), nil, ownerAddress, "", false, gas, "Cannot list soulbound tokens")
+	CallMarket(t, ct, "list", []byte(listPayload), nil, ownerAddress, "", true, gas, "")
+}
+
+// TestListSoulboundTokenNonOwnerBlocked verifies a non-owner holder CANNOT list
+// a soulbound token. magi_nft aborts a soulbound transfer whose `from` isn't the
+// collection owner, so the seller→buyer leg would always fail; we block at list.
+func TestListSoulboundTokenNonOwnerBlocked(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	// Mint a soulbound NFT directly to a non-owner holder.
+	payload := `{"to":"hive:buyer","id":"soul1","amount":1,"maxSupply":1,"soulbound":true}`
+	CallNft(t, ct, "mint", []byte(payload), nil, ownerAddress, true, gas, "")
+
+	ApproveNftForMarket(t, ct, "hive:buyer")
+
+	// The non-owner holder must not be able to list it.
+	listPayload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"soul1","amount":1,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
+	CallMarket(t, ct, "list", []byte(listPayload), nil, "hive:buyer", "", false, gas, "Cannot list soulbound tokens")
 }
 
 // ===================================

@@ -48,6 +48,13 @@ func mMulU64(price *big.Int, qty uint64) *big.Int {
 	return new(big.Int).Mul(price, new(big.Int).SetUint64(qty))
 }
 
+// mMul is an exact big*big product — used for token-sale totals
+// (pricePerUnit * buyAmount) where both operands are arbitrary-precision
+// integer unit counts/prices (no rounding).
+func mMul(a, b *big.Int) *big.Int {
+	return new(big.Int).Mul(a, b)
+}
+
 // mMulBpsDiv returns floor(total * bps / 10000).
 func mMulBpsDiv(total *big.Int, bps uint64) *big.Int {
 	if bps == 0 {
@@ -76,6 +83,12 @@ func setMoneyState(key string, v *big.Int) {
 // Per-entity money helpers (keys match existing listingKey/offerKey/auctionKey).
 func setListingMoney(id uint64, field string, v *big.Int) { setMoneyState(listingKey(id, field), v) }
 func getListingMoney(id uint64, field string) *big.Int    { return getMoneyState(listingKey(id, field)) }
+func setTokenListingMoney(id uint64, field string, v *big.Int) {
+	setMoneyState(tokenListingKey(id, field), v)
+}
+func getTokenListingMoney(id uint64, field string) *big.Int {
+	return getMoneyState(tokenListingKey(id, field))
+}
 func setOfferMoney(id uint64, field string, v *big.Int)   { setMoneyState(offerKey(id, field), v) }
 func getOfferMoney(id uint64, field string) *big.Int      { return getMoneyState(offerKey(id, field)) }
 func setAuctionMoney(id uint64, field string, v *big.Int) { setMoneyState(auctionKey(id, field), v) }

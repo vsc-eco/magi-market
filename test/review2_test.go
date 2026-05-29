@@ -351,6 +351,7 @@ func TestFeeAndRoyaltyCombined100Percent(t *testing.T) {
 	InitNft(t, ct2)
 	feePayload := fmt.Sprintf(`{"feeBps":5000,"feeRecipient":"%s"}`, feeRecipientAddress)
 	CallMarket(t, ct2, "init", []byte(feePayload), nil, ownerAddress, "", true, gas, "")
+	SeedTestPaymentTokens(t, ct2)
 
 	// Set 50% royalty (combined = 100%)
 	royaltyPayload := fmt.Sprintf(`{"nftContract":"%s","royaltyBps":5000,"royaltyRecipient":"hive:creator"}`, NftContractID)
@@ -390,6 +391,7 @@ func TestFeeAndRoyaltyExceed100PercentRejected(t *testing.T) {
 	InitNft(t, ct2)
 	feePayload := fmt.Sprintf(`{"feeBps":6000,"feeRecipient":"%s"}`, feeRecipientAddress)
 	CallMarket(t, ct2, "init", []byte(feePayload), nil, ownerAddress, "", true, gas, "")
+	SeedTestPaymentTokens(t, ct2)
 
 	// Set 50% royalty → combined = 110% > 100%
 	royaltyPayload := fmt.Sprintf(`{"nftContract":"%s","royaltyBps":5000,"royaltyRecipient":"hive:creator"}`, NftContractID)

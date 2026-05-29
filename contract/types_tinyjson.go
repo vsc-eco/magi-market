@@ -984,6 +984,8 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract13(in *jlexer.Lexer, out *PaymentT
 		switch key {
 		case "token":
 			out.Token = string(in.String())
+		case "decoder":
+			out.Decoder = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -4594,6 +4596,8 @@ func tinyjsonA17a9c65DecodeTinyjsonGenContract56(in *jlexer.Lexer, out *BuyPaylo
 			out.ListingId = uint64(in.Uint64())
 		case "amount":
 			out.Amount = uint64(in.Uint64())
+		case "maxTotalPrice":
+			out.MaxTotalPrice = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -4617,6 +4621,11 @@ func tinyjsonA17a9c65EncodeTinyjsonGenContract56(out *jwriter.Writer, in BuyPayl
 		const prefix string = ",\"amount\":"
 		out.RawString(prefix)
 		out.Uint64(uint64(in.Amount))
+	}
+	{
+		const prefix string = ",\"maxTotalPrice\":"
+		out.RawString(prefix)
+		out.String(in.MaxTotalPrice)
 	}
 	out.RawByte('}')
 }
@@ -7129,6 +7138,37 @@ func (v BundleDelistedEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonC3EncodeBundleDelistedEvent(w, v)
 }
 
+// PaymentTokenEvent encode (hand-added: payment-token whitelist events)
+func tinyjsonPTEncodePaymentTokenEvent(out *jwriter.Writer, in PaymentTokenEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"token\":"
+			out.RawString(p2[1:])
+			out.String(string(in.Attributes.Token))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v PaymentTokenEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonPTEncodePaymentTokenEvent(w, v)
+}
+
 // ---- hand-added (sub-project D1): NFT-for-NFT swap structs ----
 
 // ProposeSwapPayload decode (input: offeredNft, offeredTokenId, offeredAmount, wantedNft,
@@ -8175,4 +8215,188 @@ func tinyjsonG2EncodeMintSpotsDelistedEvent(out *jwriter.Writer, in MintSpotsDel
 
 func (v MintSpotsDelistedEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonG2EncodeMintSpotsDelistedEvent(w, v)
+}
+
+// ==========================================
+// Token-sale (ERC-20) — hand-maintained tinyjson (never regenerated).
+// Mirrors the G2 hand pattern. Token amounts are big.Int decimal strings.
+// ==========================================
+
+func tinyjsonTkDecodeListTokenPayload(in *jlexer.Lexer, out *ListTokenPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "tokenContract":
+			out.TokenContract = string(in.String())
+		case "amount":
+			out.Amount = string(in.String())
+		case "paymentToken":
+			out.PaymentToken = string(in.String())
+		case "pricePerUnit":
+			out.PricePerUnit = string(in.String())
+		case "expirationBlock":
+			out.ExpirationBlock = uint64(in.Uint64())
+		case "startBlock":
+			out.StartBlock = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *ListTokenPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonTkDecodeListTokenPayload(l, v)
+}
+
+func tinyjsonTkDecodeBuyTokenPayload(in *jlexer.Lexer, out *BuyTokenPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "listingId":
+			out.ListingId = uint64(in.Uint64())
+		case "amount":
+			out.Amount = string(in.String())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *BuyTokenPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonTkDecodeBuyTokenPayload(l, v)
+}
+
+func tinyjsonTkDecodeTokenListingIdPayload(in *jlexer.Lexer, out *TokenListingIdPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "listingId":
+			out.ListingId = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *TokenListingIdPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonTkDecodeTokenListingIdPayload(l, v)
+}
+
+func tinyjsonTkEncodeTokenListingResponse(out *jwriter.Writer, in TokenListingResponse) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"listingId\":"
+		out.RawString(prefix[1:])
+		out.Uint64(uint64(in.ListingId))
+	}
+	{
+		const prefix string = ",\"seller\":"
+		out.RawString(prefix)
+		out.String(string(in.Seller))
+	}
+	{
+		const prefix string = ",\"tokenContract\":"
+		out.RawString(prefix)
+		out.String(string(in.TokenContract))
+	}
+	{
+		const prefix string = ",\"amount\":"
+		out.RawString(prefix)
+		out.String(string(in.Amount))
+	}
+	{
+		const prefix string = ",\"pricePerUnit\":"
+		out.RawString(prefix)
+		out.String(string(in.PricePerUnit))
+	}
+	{
+		const prefix string = ",\"paymentToken\":"
+		out.RawString(prefix)
+		out.String(string(in.PaymentToken))
+	}
+	{
+		const prefix string = ",\"active\":"
+		out.RawString(prefix)
+		out.Bool(bool(in.Active))
+	}
+	{
+		const prefix string = ",\"expirationBlock\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.ExpirationBlock))
+	}
+	{
+		const prefix string = ",\"startBlock\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.StartBlock))
+	}
+	{
+		const prefix string = ",\"feeBps\":"
+		out.RawString(prefix)
+		out.Uint64(uint64(in.FeeBps))
+	}
+	out.RawByte('}')
+}
+
+func (v TokenListingResponse) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonTkEncodeTokenListingResponse(w, v)
 }

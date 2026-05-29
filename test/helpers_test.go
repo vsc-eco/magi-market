@@ -21,6 +21,9 @@ var _ = embed.FS{}
 
 const MarketContractID = "market"
 const TokenID = "paytoken"
+// AssetTokenID is a 2nd magi_token instance used as the SELLABLE asset in
+// token-for-token sale tests (distinct from the payment token).
+const AssetTokenID = "assettoken"
 const NftContractID = "nft"
 
 // FeeTokenID is the fee-on-transfer mock's contract id. The marketplace passes
@@ -90,6 +93,7 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct := test_utils.NewContractTest()
 	ct.RegisterContract(MarketContractID, ownerAddress, MarketWasm)
 	ct.RegisterContract(TokenID, ownerAddress, TokenWasm)
+	ct.RegisterContract(AssetTokenID, ownerAddress, TokenWasm)
 	ct.RegisterContract(NftContractID, ownerAddress, NftWasm)
 	ct.RegisterContract(FeeTokenID, ownerAddress, FeeTokenWasm)
 	ct.RegisterContract(UtxoMockID, ownerAddress, UtxoMockWasm)
@@ -244,9 +248,27 @@ func InitNft(t *testing.T, ct *test_utils.ContractTest) {
 }
 
 // InitMarket initializes the marketplace with 2.5% fee (250 bps).
+// After init, the payment-token whitelist is auto-seeded with native
+// HBD/HIVE only (per the 2026-05-27 audit hardening). This helper also
+// runs SeedTestPaymentTokens so the rest of the test suite, which
+// passes `TokenID`/`FeeTokenID`/`UtxoMockID`/`DexMockID` as
+// paymentToken, keeps working. Mirrors production deploy where the
+// admin runs `addPaymentToken` per custom token after init.
 func InitMarket(t *testing.T, ct *test_utils.ContractTest) {
 	payload := fmt.Sprintf(`{"feeBps":250,"feeRecipient":"%s"}`, feeRecipientAddress)
 	CallMarket(t, ct, "init", []byte(payload), nil, ownerAddress, "", true, gas, "")
+	SeedTestPaymentTokens(t, ct)
+}
+
+// SeedTestPaymentTokens whitelists every mock-token contract id the test
+// suite uses as a paymentToken. Init-bypassing tests (those that build
+// their own init payload directly) should call this AFTER their custom
+// init to re-establish the standard paymentToken set.
+func SeedTestPaymentTokens(t *testing.T, ct *test_utils.ContractTest) {
+	for _, tok := range []string{TokenID, AssetTokenID, FeeTokenID, UtxoMockID, DexMockID} {
+		add := fmt.Sprintf(`{"token":"%s"}`, tok)
+		CallMarket(t, ct, "addPaymentToken", []byte(add), nil, ownerAddress, "", true, gas, "")
+	}
 }
 
 // InitFullSetup initializes token + NFT + marketplace.

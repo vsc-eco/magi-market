@@ -246,15 +246,13 @@ func TestRemovePaymentToken(t *testing.T) {
 func TestListWithUnwhitelistedToken(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
-
-	// Whitelist a different token (activates whitelist)
-	CallMarket(t, ct, "addPaymentToken", []byte(`{"token":"other_token"}`), nil, ownerAddress, "", true, gas, "")
-
+	// InitFullSetup → InitMarket auto-seeds hive/hbd + the standard test
+	// tokens (TokenID, FeeTokenID, etc) per the 2026-05-27 audit hardening.
+	// To prove the gate fires, pass an id we KNOW isn't seeded.
 	MintNft(t, ct, ownerAddress, "1", 5, 100)
 	ApproveNftForMarket(t, ct, ownerAddress)
 
-	// paytoken is NOT whitelisted
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"contract:never_whitelisted","pricePerUnit":"1000"}`, NftContractID)
 	CallMarket(t, ct, "list", []byte(payload), nil, ownerAddress, "", false, gas, "Payment token not allowed")
 }
 
@@ -271,15 +269,26 @@ func TestListWithWhitelistedToken(t *testing.T) {
 	CallMarket(t, ct, "list", []byte(payload), nil, ownerAddress, "", true, gas, "")
 }
 
-func TestNoWhitelistAllowsAnyToken(t *testing.T) {
+// Post-audit (2026-05-27) Init seeds the whitelist with native HBD/HIVE
+// AND the test helper seeds the mock tokens; an unseeded random id is
+// now ALWAYS rejected. The old "whitelist defaults off → accepts any"
+// behaviour was the security flaw the audit closed.
+func TestWhitelistEnabledByDefault(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
-	// No whitelist set, any token should be allowed
-	result, _, _ := CallMarket(t, ct, "isPaymentTokenAllowed", []byte(`{"token":"any_token"}`), nil, "hive:anyone", "", true, gas, "")
+	// Native HIVE/HBD seeded at init → allowed.
+	for _, tok := range []string{"hive", "hbd"} {
+		result, _, _ := CallMarket(t, ct, "isPaymentTokenAllowed", []byte(fmt.Sprintf(`{"token":"%s"}`, tok)), nil, "hive:anyone", "", true, gas, "")
+		var resp struct{ Allowed bool `json:"allowed"` }
+		parseJSON(result, &resp)
+		assert.True(t, resp.Allowed, "%s should be whitelisted after init", tok)
+	}
+	// An arbitrary unseeded id is NOT allowed.
+	result, _, _ := CallMarket(t, ct, "isPaymentTokenAllowed", []byte(`{"token":"contract:random_unseeded"}`), nil, "hive:anyone", "", true, gas, "")
 	var resp struct{ Allowed bool `json:"allowed"` }
 	parseJSON(result, &resp)
-	assert.True(t, resp.Allowed)
+	assert.False(t, resp.Allowed, "unseeded token must be rejected")
 }
 
 func TestWhitelistNonOwner(t *testing.T) {

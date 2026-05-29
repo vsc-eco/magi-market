@@ -259,11 +259,10 @@ func TestAuctionWithUnwhitelistedToken(t *testing.T) {
 	MintNft(t, ct, ownerAddress, "1", 1, 1)
 	ApproveNftForMarket(t, ct, ownerAddress)
 
-	// Activate whitelist with a different token
-	CallMarket(t, ct, "addPaymentToken", []byte(`{"token":"other_token"}`), nil, ownerAddress, "", true, gas, "")
-
+	// InitFullSetup seeds the standard test tokens; pass an id we KNOW
+	// isn't seeded to prove the gate fires.
 	ct.BlockHeight = 100
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"%s","auctionType":"english","startPrice":"1000","endPrice":"0","startBlock":100,"endBlock":200}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":1,"paymentToken":"contract:never_whitelisted","auctionType":"english","startPrice":"1000","endPrice":"0","startBlock":100,"endBlock":200}`, NftContractID)
 	CallMarket(t, ct, "createAuction", []byte(payload), nil, ownerAddress, "", false, gas, "Payment token not allowed")
 }
 
@@ -275,12 +274,10 @@ func TestOfferWithUnwhitelistedToken(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
-	CallMarket(t, ct, "addPaymentToken", []byte(`{"token":"other_token"}`), nil, ownerAddress, "", true, gas, "")
-
 	buyer := "hive:buyer"
 	MintAndApproveToken(t, ct, buyer, 50000)
 
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"%s","pricePerUnit":"1000"}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"contract:never_whitelisted","pricePerUnit":"1000"}`, NftContractID)
 	CallMarket(t, ct, "makeOffer", []byte(payload), nil, buyer, "", false, gas, "Payment token not allowed")
 }
 

@@ -279,6 +279,10 @@ func rsplitKey(nftContract string, suffix string) string {
 }
 
 func setRoyaltySplits(nft string, recips []string, bpss []uint64) {
+	// Drop any stale entries from a previous (longer) split set before
+	// rewriting — otherwise resolveRoyaltySplits would still see them via
+	// getRoyaltySplitCount once n is bumped back up later.
+	clearRoyaltySplits(nft)
 	n := uint64(len(recips))
 	setUint64State(rsplitKey(nft, "n"), n)
 	for i := uint64(0); i < n; i++ {
@@ -286,6 +290,21 @@ func setRoyaltySplits(nft string, recips []string, bpss []uint64) {
 		setStringState(rsplitKey(nft, is+"|r"), recips[i])
 		setUint64State(rsplitKey(nft, is+"|b"), bpss[i])
 	}
+}
+
+// clearRoyaltySplits drops the multi-split state for a collection so
+// resolveRoyaltySplits falls back to the legacy single entry. Called from
+// SetRoyalty (otherwise stale splits silently win over the new single
+// recipient) and from setRoyaltySplits before re-writing (otherwise a
+// shorter new set leaves old indices around).
+func clearRoyaltySplits(nft string) {
+	n := getUint64State(rsplitKey(nft, "n"))
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		sdk.StateDeleteObject(rsplitKey(nft, is+"|r"))
+		sdk.StateDeleteObject(rsplitKey(nft, is+"|b"))
+	}
+	sdk.StateDeleteObject(rsplitKey(nft, "n"))
 }
 
 func getRoyaltySplitCount(nft string) uint64 {
@@ -482,6 +501,37 @@ func loadBundleRoyaltySplitSnapshot(id uint64, fallbackRecip string, fallbackBps
 	return []string{}, []uint64{}
 }
 
+// snapshotRoyaltySplitsForSwap mirrors the bundle pair, locking the
+// offered-collection royalty splits into the swap entity at propose time
+// so the top-up can pay creator royalty even though the swap is barter.
+func snapshotRoyaltySplitsForSwap(id uint64, recips []string, bpss []uint64) {
+	n := uint64(len(recips))
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		setSwapField(id, "rs_"+is+"_r", recips[i])
+		setSwapUint64(id, "rs_"+is+"_b", bpss[i])
+	}
+	setSwapUint64(id, "rs_n", n)
+}
+
+func loadSwapRoyaltySplitSnapshot(id uint64, fallbackRecip string, fallbackBps uint64) ([]string, []uint64) {
+	n := getSwapUint64(id, "rs_n")
+	if n > 0 {
+		recips := make([]string, n)
+		bpss := make([]uint64, n)
+		for i := uint64(0); i < n; i++ {
+			is := strconv.FormatUint(i, 10)
+			recips[i] = getSwapField(id, "rs_"+is+"_r")
+			bpss[i] = getSwapUint64(id, "rs_"+is+"_b")
+		}
+		return recips, bpss
+	}
+	if fallbackBps > 0 && fallbackRecip != "" {
+		return []string{fallbackRecip}, []uint64{fallbackBps}
+	}
+	return []string{}, []uint64{}
+}
+
 // ===================================
 // Swap State Helpers (D1)
 // ===================================
@@ -607,6 +657,23 @@ func setMinBidIncrementBps(v uint64) {
 	setUint64State("min_bid_inc", v)
 }
 
+// defaultMinBidIncrementBps is the floor applied in placeBid when no explicit
+// min increment is configured (min_bid_inc unset = 0). Without a floor a
+// bidder could outbid by a single unit repeatedly and — combined with
+// anti-snipe endBlock extension — keep an English auction open indefinitely
+// at near-zero cost. 1% makes the grief budget grow geometrically.
+const defaultMinBidIncrementBps = 100
+
+// effectiveMinBidIncrementBps returns the configured increment, or the 1%
+// floor when unset. getMinBidIncrementBps stays raw for getInfo reporting.
+func effectiveMinBidIncrementBps() uint64 {
+	v := getMinBidIncrementBps()
+	if v == 0 {
+		return defaultMinBidIncrementBps
+	}
+	return v
+}
+
 // ===================================
 // Anti-Snipe Helpers
 // ===================================
@@ -653,6 +720,83 @@ func assertPaymentTokenAllowed(token string) {
 	}
 }
 
+// ---- Payment-token balance-decoder registry ----
+//
+// Binds a whitelisted token to a KNOWN raw-state layout so tokenBalanceOf
+// reads the right key + encoding instead of probing `bal|` then `a-` and
+// guessing — probing can silently misread a token that uses neither (or
+// both) layouts as 0, which would corrupt escrowIn's balance-delta. Set per
+// token via addPaymentToken's optional `decoder`. Unset = "auto" (probe),
+// preserved for tokens whitelisted before this existed and for native
+// HIVE/HBD (handled by isNativeAsset, never reaches the registry).
+const (
+	decoderMagiToken = "magi_token" // bal|<acct>, decodeTokenBig (big-endian)
+	decoderUtxo      = "utxo"       // a-<acct>, decodeUtxoU64 (big-endian-trimmed)
+	decoderNative    = "native"     // hive/hbd via sdk.GetBalance
+)
+
+func paymentTokenDecoderKey(token string) string {
+	return "ptwd|" + token
+}
+
+func getPaymentTokenDecoder(token string) string {
+	return getStringState(paymentTokenDecoderKey(token))
+}
+
+func setPaymentTokenDecoder(token, decoder string) {
+	if decoder != "" {
+		setStringState(paymentTokenDecoderKey(token), decoder)
+	}
+}
+
+func isValidDecoder(d string) bool {
+	return d == decoderMagiToken || d == decoderUtxo || d == decoderNative
+}
+
+// assertValidTokenId rejects tokenIds containing characters that would break
+// out of the JSON string when concatenated into a magi_nft/delegated-mint
+// payload. magi_nft itself only blocks `|`, so without this gate an
+// attacker who minted an NFT with a quote-bearing id could overwrite the
+// `from` field at safeTransferFrom and steal NFTs from any account that
+// has approved this market. Mirrors the listMintSpots allowlist; every
+// entrypoint that accepts a user-supplied tokenId must call this.
+func assertValidTokenId(s string) {
+	if s == "" {
+		return
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == ':' || c == '-' ||
+			c == '_' || c == '.') {
+			sdk.Abort("tokenId contains invalid characters")
+		}
+	}
+}
+
+// assertValidAccount rejects address/account strings that contain
+// JSON-breaking characters. The market concatenates royalty/fee
+// recipients into the {"to":"…","amount":"…"} payload it sends to a
+// magi_token contract — a recipient with embedded quotes/braces could
+// inject a second `to` field via tinyjson's last-key-wins decoder and
+// redirect the payment. Same defensive shape as assertValidTokenId,
+// scoped to L2 account formats (`hive:<acct>`, `did:<did>`,
+// `contract:<id>`). Empty is permitted (callers pre-validate non-empty
+// where required).
+func assertValidAccount(s string) {
+	if s == "" {
+		return
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == ':' || c == '-' ||
+			c == '_' || c == '.') {
+			sdk.Abort("account contains invalid characters")
+		}
+	}
+}
+
 // ===================================
 // Cross-Contract Token Helpers (ERC-20)
 // ===================================
@@ -669,9 +813,15 @@ func assertPaymentTokenAllowed(token string) {
 
 // decodeTokenBig mirrors magi_token-contract bytesToBigInt (commit a819106):
 // big.Int.Bytes() == big-endian unsigned magnitude; absent/empty => 0.
+// Cap at 32 bytes (256-bit, the practical ERC-20 ceiling) so a malicious
+// or buggy token contract that writes a multi-megabyte bal|<account> can't
+// burn gas / corrupt the contract via inflated balance reads.
 func decodeTokenBig(s *string) *big.Int {
 	if s == nil || *s == "" {
 		return big.NewInt(0)
+	}
+	if len(*s) > 32 {
+		sdk.Abort("token balance bytes >32")
 	}
 	return new(big.Int).SetBytes([]byte(*s))
 }
@@ -708,14 +858,82 @@ func decodeNftU64(s *string) uint64 {
 	return binary.LittleEndian.Uint64(buf[:])
 }
 
+// ===================================
+// Native asset helpers (HBD / HIVE)
+// ===================================
+//
+// `paymentToken` was previously interpreted exclusively as a contract id
+// (magi_token / utxo-mapping). The strings "hive" and "hbd" route through
+// the L2 ledger via `hive.draw` (pull from caller's transfer.allow intent)
+// and `hive.transfer` (pay out from the contract). Balance reads use
+// `hive.get_balance`. This lets every flow that goes through the three
+// primitives below — listings, auctions, mint spots, offers, bundles,
+// rentals, token sales — accept native HBD/HIVE without per-flow changes.
+
+const nativeAssetHive = "hive"
+const nativeAssetHbd = "hbd"
+
+func isNativeAsset(s string) bool {
+	return s == nativeAssetHive || s == nativeAssetHbd
+}
+
+func nativeAssetOf(s string) sdk.Asset {
+	if s == nativeAssetHbd {
+		return sdk.AssetHbd
+	}
+	return sdk.AssetHive
+}
+
+// nativeAmountInt64 narrows a *big.Int to int64. The native sdk helpers
+// take int64; aborts on overflow rather than silently truncating.
+func nativeAmountInt64(v *big.Int) int64 {
+	if v == nil {
+		return 0
+	}
+	if !v.IsInt64() {
+		sdk.Abort("native amount overflows int64")
+	}
+	return v.Int64()
+}
+
 func tokenBalanceOf(tokenContract, account string) *big.Int {
-	if v := sdk.ContractStateGet(tokenContract, "bal|"+account); v != nil && *v != "" {
-		return decodeTokenBig(v)
+	d := ""
+	if !isNativeAsset(tokenContract) {
+		d = getPaymentTokenDecoder(tokenContract)
 	}
-	if v := sdk.ContractStateGet(tokenContract, "a-"+account); v != nil && *v != "" {
-		return new(big.Int).SetUint64(decodeUtxoU64(v))
+	return tokenBalanceOfWithDecoder(tokenContract, account, d)
+}
+
+// tokenBalanceOfWithDecoder reads a balance using an ALREADY-resolved decoder
+// type, so callers that already know it (escrowIn) don't re-read the registry
+// key. A known type reads exactly one key with the right encoding; "auto"
+// (unset) falls back to legacy probing for tokens whitelisted before the
+// registry existed.
+func tokenBalanceOfWithDecoder(tokenContract, account, decoder string) *big.Int {
+	if isNativeAsset(tokenContract) {
+		return big.NewInt(sdk.GetBalance(sdk.Address(account), nativeAssetOf(tokenContract)))
 	}
-	return big.NewInt(0)
+	switch decoder {
+	case decoderMagiToken:
+		if v := sdk.ContractStateGet(tokenContract, "bal|"+account); v != nil && *v != "" {
+			return decodeTokenBig(v)
+		}
+		return big.NewInt(0)
+	case decoderUtxo:
+		if v := sdk.ContractStateGet(tokenContract, "a-"+account); v != nil && *v != "" {
+			return new(big.Int).SetUint64(decodeUtxoU64(v))
+		}
+		return big.NewInt(0)
+	default:
+		// "auto"/unset: probe bal| then a-.
+		if v := sdk.ContractStateGet(tokenContract, "bal|"+account); v != nil && *v != "" {
+			return decodeTokenBig(v)
+		}
+		if v := sdk.ContractStateGet(tokenContract, "a-"+account); v != nil && *v != "" {
+			return new(big.Int).SetUint64(decodeUtxoU64(v))
+		}
+		return big.NewInt(0)
+	}
 }
 
 // ===================================
@@ -842,9 +1060,24 @@ func jsonResponse(marshaler interface{ MarshalTinyJSON(*jwriter.Writer) }) *stri
 // ACTUAL amount received (balance-delta), robust to fee-on-transfer / utxo deduct_fee.
 func escrowIn(paymentToken, payer string, requested *big.Int) *big.Int {
 	contractAddr := getContractAddress()
-	before := tokenBalanceOf(paymentToken, contractAddr)
+	native := isNativeAsset(paymentToken)
+	decoder := ""
+	if !native {
+		decoder = getPaymentTokenDecoder(paymentToken)
+	}
+	// Exact-transfer tokens — native HIVE/HBD, and tokens explicitly bound to
+	// the standard magi_token decoder — move precisely `requested` with no
+	// fee-on-transfer, and the transfer aborts the whole tx on failure. So
+	// the before/after balance-read pair is pure overhead; skip it and trust
+	// the amount. Keep the delta for utxo (deduct_fee) and auto/unset tokens
+	// where the received amount can legitimately differ from `requested`.
+	if native || decoder == decoderMagiToken {
+		tokenTransferFromBig(paymentToken, payer, contractAddr, requested)
+		return new(big.Int).Set(requested)
+	}
+	before := tokenBalanceOfWithDecoder(paymentToken, contractAddr, decoder)
 	tokenTransferFromBig(paymentToken, payer, contractAddr, requested)
-	after := tokenBalanceOf(paymentToken, contractAddr)
+	after := tokenBalanceOfWithDecoder(paymentToken, contractAddr, decoder)
 	received := mSub(after, before)
 	if mIsZero(received) {
 		sdk.Abort("no payment received")
@@ -991,7 +1224,22 @@ func clearPendingOwner() {
 }
 
 // big.Int variants of the token call helpers (added now, swapped in later tasks).
+//
+// Native branch (paymentToken in {"hive","hbd"}): the L2 ledger handles
+// balances via `hive.draw` (pull from the caller's signed transfer.allow
+// intent) and `hive.transfer` (pay out from the contract). The contract
+// itself is always the recipient of an escrow draw, so the explicit `to`
+// argument is unused on the native path; we still assert `from == msg.caller`
+// so the semantics match the magi_token path (caller pays).
 func tokenTransferFromBig(tokenContract, from, to string, amount *big.Int) {
+	if isNativeAsset(tokenContract) {
+		caller := sdk.GetEnvKey("msg.caller")
+		if caller == nil || *caller != from {
+			sdk.Abort("native payment requires intent from msg.caller")
+		}
+		sdk.HiveDraw(nativeAmountInt64(amount), nativeAssetOf(tokenContract))
+		return
+	}
 	payload := `{"from":"` + from + `","to":"` + to + `","amount":"` + formatMoney(amount) + `"}`
 	if sdk.ContractCallSimple(tokenContract, "transferFrom", payload) == nil {
 		sdk.Abort("transferFrom call failed")
@@ -999,6 +1247,10 @@ func tokenTransferFromBig(tokenContract, from, to string, amount *big.Int) {
 }
 
 func tokenTransferBig(tokenContract, to string, amount *big.Int) {
+	if isNativeAsset(tokenContract) {
+		sdk.HiveTransfer(sdk.Address(to), nativeAmountInt64(amount), nativeAssetOf(tokenContract))
+		return
+	}
 	payload := `{"to":"` + to + `","amount":"` + formatMoney(amount) + `"}`
 	if sdk.ContractCallSimple(tokenContract, "transfer", payload) == nil {
 		sdk.Abort("transfer call failed")
