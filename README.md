@@ -407,6 +407,45 @@ account validator, min-bid floor, batch caps, mint-spot overflow guard,
 payment-token decoder validation, native-paymentToken rejection, whitelist
 defaults).
 
+### Initializing a fresh deployment
+
+Deploying the wasm does **not** initialize the contract — the deployer leaves
+`owner` empty, and `init` is a separate call that sets `owner` to
+`msg.caller`. Until it runs, every write entrypoint is unusable.
+
+Broadcast a `vsc.call` as the owner account with any tool that can sign one
+(`aioha.vscCallContract`, a `custom_json` broadcaster, or the SDK's
+`buildInit` from `@vsc.eco/market-core`, which defaults `rcLimit` to 10000):
+
+```jsonc
+// action: "init"   rcLimit: 10000   signed by the contract owner
+{ "feeBps": 0, "feeRecipient": "hive:magi.contracts" }
+```
+
+- **Owner-only, and exactly once.** `init` aborts `Only contract owner can
+  initialize` if `msg.caller != contract.owner`, and `Already initialized` on
+  any later attempt. There is no re-init or reset.
+- **`feeBps`** is the global marketplace fee in basis points, `<= 10000`.
+  `0` is valid (fee-free). **`feeRecipient`** is required, must be a valid
+  account, and is validated by `assertValidAccount` — a malformed one aborts.
+- **`rcLimit` must be `10000`, not the usual `1000`.** `init` is heavy;
+  `1000` fails the L2 call with `ok:false, ret:""` ("cost limit exceeded")
+  while the Hive L1 tx still reports success. This has cost a real failed
+  deployment — do not lower it.
+
+What `init` seeds, beyond owner/fee: `paused=0`; listing/offer/auction id
+counters at `0`; the min-bid-increment at the `100` bps (1%) anti-snipe floor;
+and the payment-token whitelist with **native `hive`/`hbd` only**. That last
+one is deliberate — the contract is safe-by-default, so any custom
+`magi_token` or UTXO-mapped payment asset stays rejected until the owner
+explicitly runs `addPaymentToken` (ideally with the matching `decoder`).
+
+**Verifying it took:** query `findContractOutput(filterOptions:{byContract:
+"<contractId>"})` → `results{ ok ret }`. Do *not* rely on `getStateByKeys`
+alone — a lagging node returns `null` for state that was written minutes
+earlier, which reads as a failed init when it actually succeeded. A Hive-L1
+`findTransaction{status}` proves only L1 inclusion, never L2 execution.
+
 Notes:
 
 - `go.mod` pins `vsc-node` via a `replace`; locally an **uncommitted,
