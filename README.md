@@ -191,8 +191,27 @@ L1-address / pool / token strings against an injection allowlist.
 > `decoder` registry mitigates this for explicitly-typed tokens; the coupling
 > warning lives above the decoders in `contract/internal.go`. **Before
 > upgrading any of those contracts, re-verify the decoders and rebuild the
-> test wasm artifacts.** The delegated-mint ABI was last verified against
-> `tibfox/magi_nft-contract@feat/editioned-define-delegated-mint` (`cebd5a0`).
+> test wasm artifacts.**
+>
+> Coupling surfaces last re-verified 2026-07-19, against **vsc-eco `main`** —
+> which is what `make ext` builds from (never the sibling repo's checked-out
+> branch; see the Makefile's "external contracts" section):
+>
+> | Contract | vsc-eco `main` | Keys/encodings relied on |
+> |---|---|---|
+> | `magi_nft` | `ce2ada2` | `bal\|`, `op\|`, `sb\|`, `allow\|`, `owner` — all present, unchanged |
+> | `magi_token` | `ee21119` | `bal\|<acct>` + `big.Int.Bytes()` big-endian — unchanged |
+> | utxo-mapping | `6039c43` | `a-<acct>` big-endian-u64-trimmed |
+>
+> Both sibling repos habitually sit on feature branches locally, so `make ext`
+> resolves the vsc-eco remote (`origin` in magi_token-contract, `upstream` in
+> magi_nft-contract) and builds `<remote>/main` via `git archive` into `.build/`
+> — the sibling checkouts are never mutated. Override with
+> `make -B ext NFT_REF=<ref>`.
+>
+> The delegated-mint ABI citation previously named `cebd5a0` on
+> `feat/editioned-define-delegated-mint`; that commit is *not* an ancestor of
+> the branch that was in use, so the table above supersedes it.
 
 ## Entrypoint reference
 
@@ -335,6 +354,26 @@ The contract package only compiles under TinyGo (the SDK uses
 `go:wasmimport`); there are no host unit tests — all tests are wasm-harness
 integration tests.
 
+**On a fresh clone, use the Makefile** — `test/artifacts/*.wasm` and `go.work`
+are both gitignored, so nothing builds or tests until they are regenerated:
+
+```bash
+make setup      # write go.work pointing at your go-vsc-node checkout
+make artifacts  # build all 7 wasm artifacts the harness embeds
+make test       # rebuild what's stale, then run the full suite (~80s)
+make help       # all targets
+```
+
+**Nothing needs to be pre-cloned.** `token.wasm`/`nft.wasm` are always built
+from **vsc-eco `main`**, fetched from hardcoded canonical URLs — never from
+whatever branch a local checkout happens to sit on. If you do have local
+`go-vsc-node` / `magi_nft-contract` / `magi_token-contract` checkouts they are
+reused as a fetch cache (and never mutated — the build runs from a throwaway
+`git archive` tree under `.build/`); anything missing is cloned into
+`.build/src/`. Override with `VSC_NODE=` / `NFT_REPO=` / `TOKEN_REPO=`, or
+build a different ref with `make -B ext NFT_URL=<url-or-path> NFT_REF=<ref>`.
+The manual equivalents follow.
+
 ```bash
 # TinyGo 0.39 rejects host go1.26; go-vsc-node's go.mod requires go ≥ 1.25.7.
 export GOTOOLCHAIN=go1.25.7
@@ -348,8 +387,11 @@ cp bin/main.wasm test/artifacts/main.wasm
 GOTOOLCHAIN=go1.25.7 go test ./test/ -count=1
 ```
 
-The harness also needs `test/artifacts/{token,nft}.wasm` and the mock
-artifacts under `test/mocks/<name>/`, built per-mock, e.g.:
+The harness also needs `test/artifacts/{token,nft}.wasm` — built from the
+`magi_token-contract` / `magi_nft-contract` repos — plus four mock artifacts.
+The mocks (`dexmock`, `utxomock`, `feetoken`, `mintnftmock`) are **not** the
+production DEX/UTXO contracts: they are minimal stand-ins whose source lives in
+this repo under `test/mocks/<name>/contract/`, built per-mock, e.g.:
 
 ```bash
 cd test/mocks/mintnftmock && GOWORK=off GOTOOLCHAIN=go1.25.7 \

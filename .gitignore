@@ -12,3 +12,5 @@ results.csv
 go/
 go.work
 go.work.sum
+.build/
+bin/
