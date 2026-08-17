@@ -584,6 +584,22 @@ func bucketUnitsRemaining(id uint64) uint64 {
 	return total
 }
 
+// bucketPoolUnits sums the units left in ONE pool. A pack that promises a rare
+// slot must be able to fill it from the rare pool specifically, so the grand
+// total is not a sufficient check.
+func bucketPoolUnits(id, pool uint64) uint64 {
+	n := getBucketUint64(id, "n")
+	total := uint64(0)
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		if getBucketUint64(id, is+"_pl") != pool {
+			continue
+		}
+		total = safeAdd(total, getBucketUint64(id, is+"_amt"))
+	}
+	return total
+}
+
 // snapshotRoyaltySplitsForBundle mirrors snapshotRoyaltySplitsForListing using bundleKey prefix.
 func snapshotRoyaltySplitsForBundle(id uint64, recips []string, bpss []uint64) {
 	n := uint64(len(recips))

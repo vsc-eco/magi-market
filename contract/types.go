@@ -703,30 +703,54 @@ type BundleItem struct {
 // it matches the existing bundle/batch item cap.
 const MaxBucketEntries = 20
 
-// MaxDrawsPerTx caps the draws one transaction may perform (packs x packSize,
-// or singles). Each draw is a state write plus an NFT transfer, so an unbounded
-// purchase could exceed the execution budget and abort after taking payment.
-const MaxDrawsPerTx = 20
+// MaxDrawsPerTx caps the draws one transaction may perform (a pack's total, or
+// a run of singles). This is a GAS bound, not a storage one: every draw makes
+// its own cross-contract NFT transfer, and measured cost is ~79M gas per draw —
+// an 8-draw pack came to 633M against a 500M budget. Six keeps a purchase
+// comfortably inside it.
+//
+// Raising this meaningfully (a real 10-card pack) needs the deliveries batched
+// into one magi_nft safeBatchTransferFrom instead of one call per unit.
+const MaxDrawsPerTx = 6
+
+// MaxBucketPools caps how many pools a pack may draw from. Each pool costs a
+// pass over the entries per draw, so this bounds the work a single purchase can
+// ask for. Four is already a Pokemon-style pack (commons / uncommons / reverse
+// holo / rare); eight leaves room without letting a pack become unbounded.
+const MaxBucketPools = 8
 
 // BucketEntry is one already-minted token id and how many units of it are in
 // the bucket. Amount > 1 is how editions are stocked: each unit is a separate
 // prize, so an entry with 50 units is 50x likelier to be drawn than a 1/1.
+//
+// Pool groups entries that compete with each other. A bucket with everything in
+// pool 0 is one flat pile — the simple case. Splitting entries across pools is
+// what makes a real card pack possible: commons in pool 0, rares in pool 1, and
+// a pack that always takes one draw from pool 1 always contains a rare.
 type BucketEntry struct {
 	TokenId string `json:"tokenId"`
 	Amount  uint64 `json:"amount"`
+	Pool    uint64 `json:"pool"`
 }
 
 // ListBucketPayload creates a bucket. The seller enables single draws, pack
 // draws, or both: a zero/empty price switches that mode off, and at least one
-// must be on. PackSize is fixed for the bucket's lifetime and only matters when
-// PricePerPack is set.
+// must be on.
+//
+// PackDraws describes a pack as draws-per-pool, indexed by pool: [5] is five
+// draws from one flat pile, and [4,3,1,1] is a card pack — four commons, three
+// uncommons, one reverse holo, one rare — where the last slot GUARANTEES a rare
+// because it can only be filled from pool 3. One field expresses both the
+// simple and the elaborate case, and the pack size is just its sum.
+//
+// Single draws always come from pool 0.
 type ListBucketPayload struct {
 	NftContract     string        `json:"nftContract"`
 	Entries         []BucketEntry `json:"entries"`
 	PaymentToken    string        `json:"paymentToken"`
 	PricePerDraw    string        `json:"pricePerDraw"`
 	PricePerPack    string        `json:"pricePerPack"`
-	PackSize        uint64        `json:"packSize"`
+	PackDraws       []uint64      `json:"packDraws"`
 	ExpirationBlock uint64        `json:"expirationBlock"`
 }
 

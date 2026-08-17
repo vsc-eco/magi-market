@@ -96,7 +96,10 @@ func drawSeed(bucketId, drawIndex uint64) uint64 {
 // listing and draw — units transferred away, approval revoked. A stale entry is
 // zeroed and the draw retried rather than aborting the purchase; pruning is
 // deterministic, so every validator reaches the same result.
-func drawOne(bucketId uint64, nc, seller string, drawIndex uint64) string {
+// drawOne picks from ONE pool. Entries carry their pool id, so a pool is just a
+// filter over the same entry list — no separate storage, and the read cost per
+// draw is unchanged from the single-pile case.
+func drawOne(bucketId uint64, nc, seller string, pool, drawIndex uint64) string {
 	n := getBucketUint64(bucketId, "n")
 	contractAddr := getContractAddress()
 	operatorApproved := nftIsApprovedForAll(nc, seller, contractAddr)
@@ -112,14 +115,22 @@ func drawOne(bucketId uint64, nc, seller string, drawIndex uint64) string {
 	for attempt := uint64(0); attempt <= n; attempt++ {
 		total := uint64(0)
 		for i := uint64(0); i < n; i++ {
-			amts[i] = getBucketUint64(bucketId, strconv.FormatUint(i, 10)+"_amt")
+			is := strconv.FormatUint(i, 10)
+			// Entries outside this pool are invisible to the draw. This is what
+			// makes a slot a guarantee: a rare slot can only ever be filled from
+			// the rare pool.
+			if getBucketUint64(bucketId, is+"_pl") != pool {
+				amts[i] = 0
+				continue
+			}
+			amts[i] = getBucketUint64(bucketId, is+"_amt")
 			total = safeAdd(total, amts[i])
 		}
 		if total == 0 {
-			sdk.Abort("Bucket is sold out")
+			sdk.Abort("Bucket pool is sold out")
 		}
 
-		r := drawSeed(bucketId, drawIndex*(n+1)+attempt) % total
+		r := drawSeed(bucketId, (drawIndex*(n+1)+attempt)*MaxBucketPools+pool) % total
 
 		// Walk entries accumulating units until r lands inside one. Weighted by
 		// units with no per-unit storage.
@@ -200,11 +211,23 @@ func ListBucket(payload *string) *string {
 	if !singleOn && !packOn {
 		sdk.Abort("Set a single-draw price, a pack price, or both")
 	}
+	// packDraws is draws-per-pool: [5] is a flat five-card pack, [4,3,1,1] is a
+	// card pack whose last slot can only be filled from pool 3.
+	packSize := uint64(0)
 	if packOn {
-		if p.PackSize < 1 {
-			sdk.Abort("Pack size must be at least 1")
+		if len(p.PackDraws) == 0 {
+			sdk.Abort("Pack sales need packDraws, e.g. [5] or [4,3,1,1]")
 		}
-		if p.PackSize > MaxDrawsPerTx {
+		if len(p.PackDraws) > MaxBucketPools {
+			sdk.Abort("Too many pools in packDraws")
+		}
+		for _, d := range p.PackDraws {
+			packSize = safeAdd(packSize, d)
+		}
+		if packSize < 1 {
+			sdk.Abort("A pack must draw at least one card")
+		}
+		if packSize > MaxDrawsPerTx {
 			sdk.Abort("Pack size exceeds the per-transaction draw cap")
 		}
 	}
@@ -227,6 +250,9 @@ func ListBucket(payload *string) *string {
 		if e.Amount == 0 {
 			sdk.Abort("Amount must be greater than zero for each bucket entry")
 		}
+		if e.Pool >= MaxBucketPools {
+			sdk.Abort("Entry pool out of range")
+		}
 		// A duplicate id would split one token's units across two entries and
 		// silently double its draw weight relative to its real supply.
 		if seen[e.TokenId] {
@@ -247,6 +273,30 @@ func ListBucket(payload *string) *string {
 		}
 	}
 
+	// Every slot a pack promises must actually be stocked, or the bucket would
+	// sell a guarantee it cannot keep. Same for pool 0 when single draws are on.
+	for pool := uint64(0); pool < MaxBucketPools; pool++ {
+		need := false
+		if packOn && pool < uint64(len(p.PackDraws)) && p.PackDraws[pool] > 0 {
+			need = true
+		}
+		if singleOn && pool == 0 {
+			need = true
+		}
+		if !need {
+			continue
+		}
+		stocked := uint64(0)
+		for _, e := range p.Entries {
+			if e.Pool == pool {
+				stocked = safeAdd(stocked, e.Amount)
+			}
+		}
+		if stocked == 0 {
+			sdk.Abort("A pack slot has no entries in its pool")
+		}
+	}
+
 	feeBps := getEffectiveFeeBps(p.NftContract)
 	royaltyBps := getRoyaltyBps(p.NftContract)
 	if feeBps+royaltyBps > 10000 {
@@ -259,7 +309,6 @@ func ListBucket(payload *string) *string {
 	setBucketField(id, "pt", p.PaymentToken)
 	setBucketMoney(id, "p1", priceSingle)
 	setBucketMoney(id, "pp", pricePack)
-	setBucketUint64(id, "ps", p.PackSize)
 	setBucketField(id, "act", "1")
 	setBucketUint64(id, "exp", p.ExpirationBlock)
 	setBucketUint64(id, "n", uint64(len(p.Entries)))
@@ -268,8 +317,14 @@ func ListBucket(payload *string) *string {
 		is := strconv.FormatUint(uint64(i), 10)
 		setBucketField(id, is+"_ti", e.TokenId)
 		setBucketUint64(id, is+"_amt", e.Amount)
+		setBucketUint64(id, is+"_pl", e.Pool)
 		units = safeAdd(units, e.Amount)
 	}
+	setBucketUint64(id, "pd_n", uint64(len(p.PackDraws)))
+	for j, d := range p.PackDraws {
+		setBucketUint64(id, "pd_"+strconv.FormatUint(uint64(j), 10), d)
+	}
+	setBucketUint64(id, "ps", packSize)
 	setBucketUint64(id, "fb", feeBps)
 	setBucketUint64(id, "rb", royaltyBps)
 	setBucketField(id, "rr", getRoyaltyRecipient(p.NftContract))
@@ -334,6 +389,7 @@ func BuyFromBucket(payload *string) *string {
 	// Resolve mode -> draws + unit price.
 	var draws uint64
 	var unitPrice *big.Int
+	isPack := false
 	switch p.Mode {
 	case "single", "":
 		unitPrice = getBucketMoney(p.BucketId, "p1")
@@ -342,6 +398,7 @@ func BuyFromBucket(payload *string) *string {
 		}
 		draws = p.Quantity
 	case "pack":
+		isPack = true
 		unitPrice = getBucketMoney(p.BucketId, "pp")
 		if mIsZero(unitPrice) {
 			sdk.Abort("This bucket does not sell packs")
@@ -371,13 +428,47 @@ func BuyFromBucket(payload *string) *string {
 		}
 	}
 
+	// Build the draw plan: which pool each draw comes from. A single draw is
+	// always pool 0; a pack repeats the seller's packDraws layout once per pack.
+	plan := make([]uint64, 0, draws)
+	if isPack {
+		pdN := getBucketUint64(p.BucketId, "pd_n")
+		for q := uint64(0); q < p.Quantity; q++ {
+			for j := uint64(0); j < pdN; j++ {
+				cnt := getBucketUint64(p.BucketId, "pd_"+strconv.FormatUint(j, 10))
+				for k := uint64(0); k < cnt; k++ {
+					plan = append(plan, j)
+				}
+			}
+		}
+	} else {
+		for i := uint64(0); i < draws; i++ {
+			plan = append(plan, 0)
+		}
+	}
+
+	// Every pool must hold enough for its share of this purchase BEFORE any
+	// money moves. Checking only the grand total would let a pack promising a
+	// rare take payment and then fail mid-delivery.
+	for pool := uint64(0); pool < MaxBucketPools; pool++ {
+		want := uint64(0)
+		for _, pl := range plan {
+			if pl == pool {
+				want++
+			}
+		}
+		if want > 0 && bucketPoolUnits(p.BucketId, pool) < want {
+			sdk.Abort("Not enough units left in a required pool")
+		}
+	}
+
 	// CEI: every state field this purchase touches is written before any
 	// external call. drawOne decrements entries first, and the sold-out flag is
 	// flipped below — a re-entry through a malicious payment token or NFT
 	// contract must never see units it has already been promised.
 	drawn := make([]string, 0, draws)
-	for i := uint64(0); i < draws; i++ {
-		drawn = append(drawn, drawOne(p.BucketId, nc, seller, i))
+	for i, pool := range plan {
+		drawn = append(drawn, drawOne(p.BucketId, nc, seller, pool, uint64(i)))
 	}
 	if bucketUnitsRemaining(p.BucketId) == 0 {
 		setBucketField(p.BucketId, "act", "0")

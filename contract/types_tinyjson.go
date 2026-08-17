@@ -8433,6 +8433,8 @@ func tinyjsonC3DecodeBucketEntry(in *jlexer.Lexer, out *BucketEntry) {
 			out.TokenId = string(in.String())
 		case "amount":
 			out.Amount = uint64(in.Uint64())
+		case "pool":
+			out.Pool = uint64(in.Uint64())
 		default:
 			in.SkipRecursive()
 		}
@@ -8475,8 +8477,29 @@ func tinyjsonC3DecodeListBucketPayload(in *jlexer.Lexer, out *ListBucketPayload)
 			out.PricePerDraw = string(in.String())
 		case "pricePerPack":
 			out.PricePerPack = string(in.String())
-		case "packSize":
-			out.PackSize = uint64(in.Uint64())
+		case "packDraws":
+			if in.IsNull() {
+				in.Skip()
+				out.PackDraws = nil
+			} else {
+				in.Delim('[')
+				if out.PackDraws == nil {
+					if !in.IsDelim(']') {
+						out.PackDraws = make([]uint64, 0, 4)
+					} else {
+						out.PackDraws = []uint64{}
+					}
+				} else {
+					out.PackDraws = (out.PackDraws)[:0]
+				}
+				for !in.IsDelim(']') {
+					var v2 uint64
+					v2 = uint64(in.Uint64())
+					out.PackDraws = append(out.PackDraws, v2)
+					in.WantComma()
+				}
+				in.Delim(']')
+			}
 		case "expirationBlock":
 			out.ExpirationBlock = uint64(in.Uint64())
 		case "entries":

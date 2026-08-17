@@ -21,17 +21,29 @@ func bucketEntriesJSON(entries [][2]string) string {
 		if i > 0 {
 			s += ","
 		}
-		s += fmt.Sprintf(`{"tokenId":"%s","amount":%s}`, e[0], e[1])
+		s += fmt.Sprintf(`{"tokenId":"%s","amount":%s,"pool":0}`, e[0], e[1])
+	}
+	return s + "]"
+}
+
+// bucketPoolEntriesJSON builds entries spread across pools: {tokenId, amount, pool}.
+func bucketPoolEntriesJSON(entries [][3]string) string {
+	s := "["
+	for i, e := range entries {
+		if i > 0 {
+			s += ","
+		}
+		s += fmt.Sprintf(`{"tokenId":"%s","amount":%s,"pool":%s}`, e[0], e[1], e[2])
 	}
 	return s + "]"
 }
 
 // listBucket stocks a bucket and returns its id.
-func listBucket(t *testing.T, ct *test_utils.ContractTest, seller, entries, priceDraw, pricePack string, packSize uint64) uint64 {
+func listBucket(t *testing.T, ct *test_utils.ContractTest, seller, entries, priceDraw, pricePack, packDraws string) uint64 {
 	t.Helper()
 	payload := fmt.Sprintf(
-		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"%s","pricePerPack":"%s","packSize":%d,"expirationBlock":0}`,
-		NftContractID, entries, TokenID, priceDraw, pricePack, packSize)
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"%s","pricePerPack":"%s","packDraws":%s,"expirationBlock":0}`,
+		NftContractID, entries, TokenID, priceDraw, pricePack, packDraws)
 	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
 	return ParseCreated(res).Id
 }
@@ -53,7 +65,7 @@ func TestBucketSingleDrawDelivers(t *testing.T) {
 	feeBefore := QueryTokenBalance(t, ct, feeRecipientAddress)
 	sellerBefore := QueryTokenBalance(t, ct, seller)
 
-	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"b1", "1"}, {"b2", "1"}}), "10000", "0", 0)
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"b1", "1"}, {"b2", "1"}}), "10000", "0", "[]")
 
 	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
 	_, _, logs := CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
@@ -95,7 +107,7 @@ func TestBucketDrawIsWeightedByUnits(t *testing.T) {
 		MintAndApproveToken(t, ct, b, 100000)
 	}
 
-	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"rare", "1"}, {"common", "19"}}), "1000", "0", 0)
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"rare", "1"}, {"common", "19"}}), "1000", "0", "[]")
 
 	// Draw the pool down one at a time; every draw must deliver something.
 	for _, b := range buyers {
@@ -135,7 +147,7 @@ func TestBucketPackDrawsMultiple(t *testing.T) {
 	MintAndApproveToken(t, ct, buyer, 100000)
 
 	sellerBefore := QueryTokenBalance(t, ct, seller)
-	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"p1", "10"}}), "0", "10000", 3)
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"p1", "10"}}), "0", "10000", "[3]")
 
 	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
 	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
@@ -160,13 +172,13 @@ func TestBucketRefusesDisabledMode(t *testing.T) {
 	MintAndApproveToken(t, ct, buyer, 100000)
 
 	// Pack-only bucket.
-	packOnly := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"d1", "5"}}), "0", "10000", 2)
+	packOnly := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"d1", "5"}}), "0", "10000", "[2]")
 	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, packOnly)
 	// single draw must be refused on a pack-only bucket
 	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas, "")
 
 	// Single-only bucket.
-	singleOnly := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"d1", "3"}}), "1000", "0", 0)
+	singleOnly := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"d1", "3"}}), "1000", "0", "[]")
 	buy = fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, singleOnly)
 	// pack purchase must be refused on a single-only bucket
 	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas, "")
@@ -186,7 +198,7 @@ func TestBucketCannotOverdraw(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, buyer, 100000)
 
-	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"o1", "2"}}), "1000", "5000", 5)
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"o1", "2"}}), "1000", "5000", "[5]")
 
 	// packSize 5 against 2 remaining units.
 	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
@@ -219,7 +231,7 @@ func TestBucketRejectsDuplicateEntries(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 
 	payload := fmt.Sprintf(
-		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packSize":0,"expirationBlock":0}`,
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
 		NftContractID, bucketEntriesJSON([][2]string{{"dup", "2"}, {"dup", "2"}}), TokenID)
 	// duplicate token ids in one bucket must be refused
 	CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", false, gas, "")
@@ -238,7 +250,7 @@ func TestBucketDelistStopsSales(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, buyer, 100000)
 
-	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"x1", "3"}}), "1000", "0", 0)
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"x1", "3"}}), "1000", "0", "[]")
 
 	del := fmt.Sprintf(`{"bucketId":%d}`, id)
 	// a non-seller must not be able to delist
@@ -262,8 +274,99 @@ func TestBucketSellerCannotBuyOwn(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, seller, 100000)
 
-	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"s1", "3"}}), "1000", "0", 0)
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"s1", "3"}}), "1000", "0", "[]")
 	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
 	// the seller must not draw from their own bucket
 	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, seller, "", false, gas, "")
+}
+
+// TestBucketPokemonStylePack: pools turn a bucket into a real card pack. Four
+// commons, three uncommons and one guaranteed rare per pack — the rare slot can
+// only be filled from the rare pool, so it is a promise rather than a
+// probability.
+func TestBucketPokemonStylePack(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+
+	// Enough stock for two packs: 8 commons, 6 uncommons, 2 rares.
+	MintNft(t, ct, seller, "common", 4, 100)
+	MintNft(t, ct, seller, "uncommon", 4, 100)
+	MintNft(t, ct, seller, "rare", 2, 100)
+	ApproveNftForMarket(t, ct, seller)
+
+	entries := bucketPoolEntriesJSON([][3]string{
+		{"common", "4", "0"},
+		{"uncommon", "4", "1"},
+		{"rare", "2", "2"},
+	})
+	// 2 commons + 2 uncommons + 1 rare = a 5-card pack. Kept under
+	// MaxDrawsPerTx: each draw is its own NFT transfer, so pack size is bounded
+	// by gas until deliveries are batched.
+	id := listBucket(t, ct, seller, entries, "0", "10000", "[2,2,1]")
+
+	// Two buyers so neither runs out of RC mid-test.
+	for _, b := range []string{"hive:packbuyer1", "hive:packbuyer2"} {
+		MintAndApproveToken(t, ct, b, 100000)
+		buy := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
+		CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, b, "", true, gas, "")
+
+		// Every pack has exactly the promised shape.
+		assert.Equal(t, uint64(2), QueryNftBalance(t, ct, b, "common"), "2 commons per pack")
+		assert.Equal(t, uint64(2), QueryNftBalance(t, ct, b, "uncommon"), "2 uncommons per pack")
+		assert.Equal(t, uint64(1), QueryNftBalance(t, ct, b, "rare"), "every pack contains its rare")
+	}
+
+	// The whole stock is gone, and the bucket closed itself.
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "rare"), "both rares were dealt")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "common"))
+}
+
+// TestBucketRefusesPackWithEmptySlotPool: a pack that promises a rare must not
+// be listable when the rare pool is empty — otherwise the guarantee is a lie the
+// buyer only discovers at purchase time.
+func TestBucketRefusesPackWithEmptySlotPool(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	MintNft(t, ct, seller, "onlycommon", 10, 100)
+	ApproveNftForMarket(t, ct, seller)
+
+	// packDraws asks for a draw from pool 1, but nothing is stocked there.
+	entries := bucketPoolEntriesJSON([][3]string{{"onlycommon", "10", "0"}})
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"10000","packDraws":[4,1],"expirationBlock":0}`,
+		NftContractID, entries, TokenID)
+	CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", false, gas, "")
+}
+
+// TestBucketPackStopsWhenRarePoolEmpties: once the guaranteed slot's pool runs
+// out, packs must stop rather than quietly delivering a pack without its rare.
+func TestBucketPackStopsWhenRarePoolEmpties(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	MintNft(t, ct, seller, "c", 20, 100)
+	MintNft(t, ct, seller, "r", 1, 100)
+	ApproveNftForMarket(t, ct, seller)
+
+	entries := bucketPoolEntriesJSON([][3]string{{"c", "20", "0"}, {"r", "1", "1"}})
+	id := listBucket(t, ct, seller, entries, "0", "10000", "[2,1]")
+
+	b1 := "hive:rarebuyer1"
+	b2 := "hive:rarebuyer2"
+	MintAndApproveToken(t, ct, b1, 100000)
+	MintAndApproveToken(t, ct, b2, 100000)
+
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, b1, "", true, gas, "")
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, b1, "r"), "first pack takes the only rare")
+
+	// Commons remain, but the rare pool is empty — the pack can no longer keep
+	// its promise, so it must refuse.
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, b2, "", false, gas, "")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, b2, "c"), "a refused pack delivers nothing")
 }
