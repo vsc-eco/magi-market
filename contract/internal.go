@@ -20,6 +20,20 @@ func safeSub(a, b uint64) uint64 {
 	return a - b
 }
 
+func safeAdd(a, b uint64) uint64 {
+	if a+b < a {
+		sdk.Abort("safeAdd overflow")
+	}
+	return a + b
+}
+
+func safeMul(a, b uint64) uint64 {
+	if a != 0 && b > ^uint64(0)/a {
+		sdk.Abort("safeMul overflow")
+	}
+	return a * b
+}
+
 // ===================================
 // Environment Helpers
 // ===================================
@@ -469,6 +483,105 @@ func getNextBundleId() uint64 {
 
 func setNextBundleId(id uint64) {
 	setUint64State("nxt_bnd", id)
+}
+
+// ===================================
+// Bucket State Helpers (random-draw sales)
+// ===================================
+//
+// A bucket is a pool of already-minted NFT units from ONE collection, sold at
+// a fixed price where the CONTRACT picks which unit the buyer receives. Layout
+// mirrors bundles (`bnd|`) so the two read the same way:
+//
+//	bkt|<id>|s        seller
+//	bkt|<id>|nc       nft contract (one per bucket, like bundles)
+//	bkt|<id>|pt       payment token
+//	bkt|<id>|ps       draws per pack
+//	bkt|<id>|p1       price for a single draw   ("" / zero = single sales off)
+//	bkt|<id>|pp       price for one pack        ("" / zero = pack sales off)
+//	bkt|<id>|act      active flag
+//	bkt|<id>|exp      expiration block
+//	bkt|<id>|n        entry count
+//	bkt|<id>|<i>_ti   entry i token id
+//	bkt|<id>|<i>_amt  entry i units REMAINING — this is what makes editions work
+//	bkt|<id>|fb|rb|rr fee/royalty snapshot, as bundles
+//	bkt|<id>|rs_*     resolved royalty split snapshot
+//
+// Entries hold already-minted units only: the seller keeps custody and the
+// market moves a unit seller->buyer per draw, exactly like a listing.
+
+func bucketKey(id uint64, field string) string {
+	return "bkt|" + strconv.FormatUint(id, 10) + "|" + field
+}
+
+func setBucketField(id uint64, field, value string) {
+	sdk.StateSetObject(bucketKey(id, field), value)
+}
+
+func getBucketField(id uint64, field string) string {
+	return getStringState(bucketKey(id, field))
+}
+
+func getBucketUint64(id uint64, field string) uint64 {
+	return getUint64State(bucketKey(id, field))
+}
+
+func setBucketUint64(id uint64, field string, val uint64) {
+	setUint64State(bucketKey(id, field), val)
+}
+
+func isBucketActive(id uint64) bool {
+	return getBucketField(id, "act") == "1"
+}
+
+func getNextBucketId() uint64 {
+	return getUint64State("nxt_bkt")
+}
+
+func setNextBucketId(id uint64) {
+	setUint64State("nxt_bkt", id)
+}
+
+// snapshotRoyaltySplitsForBucket mirrors snapshotRoyaltySplitsForBundle using bucketKey prefix.
+func snapshotRoyaltySplitsForBucket(id uint64, recips []string, bpss []uint64) {
+	n := uint64(len(recips))
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		setBucketField(id, "rs_"+is+"_r", recips[i])
+		setBucketUint64(id, "rs_"+is+"_b", bpss[i])
+	}
+	setBucketUint64(id, "rs_n", n)
+}
+
+// loadBucketRoyaltySplitSnapshot mirrors loadBundleRoyaltySplitSnapshot using bucketKey prefix.
+func loadBucketRoyaltySplitSnapshot(id uint64, fallbackRecip string, fallbackBps uint64) ([]string, []uint64) {
+	n := getBucketUint64(id, "rs_n")
+	if n > 0 {
+		recips := make([]string, n)
+		bpss := make([]uint64, n)
+		for i := uint64(0); i < n; i++ {
+			is := strconv.FormatUint(i, 10)
+			recips[i] = getBucketField(id, "rs_"+is+"_r")
+			bpss[i] = getBucketUint64(id, "rs_"+is+"_b")
+		}
+		return recips, bpss
+	}
+	if fallbackBps > 0 && fallbackRecip != "" {
+		return []string{fallbackRecip}, []uint64{fallbackBps}
+	}
+	return []string{}, []uint64{}
+}
+
+// bucketUnitsRemaining sums the units left across every entry. Entries are
+// capped at MaxBucketEntries so this linear scan stays cheap, and deriving the
+// total instead of storing it means it can never drift from the entries.
+func bucketUnitsRemaining(id uint64) uint64 {
+	n := getBucketUint64(id, "n")
+	total := uint64(0)
+	for i := uint64(0); i < n; i++ {
+		total = safeAdd(total, getBucketUint64(id, strconv.FormatUint(i, 10)+"_amt"))
+	}
+	return total
 }
 
 // snapshotRoyaltySplitsForBundle mirrors snapshotRoyaltySplitsForListing using bundleKey prefix.

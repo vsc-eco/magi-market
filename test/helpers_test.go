@@ -176,7 +176,11 @@ func callContract(
 		Caller: authUser,
 		Self: stateEngine.TxSelf{
 			TxId:                 fmt.Sprintf("%s-%s-tx", contractId, action),
-			BlockId:              "block1",
+			// A realistic Hive block id: 40 hex chars whose first 8 are the
+			// block number. Contracts that derive randomness from block.id
+			// (buckets) validate its shape, and a short mock id would both fail
+			// that check and hide how little entropy a truncated id carries.
+			BlockId:              "05a995bf3a096cb001d6f541f46e6f67394cea62",
 			Index:                0,
 			OpIndex:              0,
 			Timestamp:            timestamp,

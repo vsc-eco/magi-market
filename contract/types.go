@@ -694,6 +694,128 @@ type BundleItem struct {
 	Amount  uint64 `json:"amount"`
 }
 
+// ===================================
+// Buckets (random-draw sales)
+// ===================================
+
+// MaxBucketEntries caps how many distinct token ids one bucket holds. The draw
+// scans entries linearly on every single draw, so this bounds execution cost;
+// it matches the existing bundle/batch item cap.
+const MaxBucketEntries = 20
+
+// MaxDrawsPerTx caps the draws one transaction may perform (packs x packSize,
+// or singles). Each draw is a state write plus an NFT transfer, so an unbounded
+// purchase could exceed the execution budget and abort after taking payment.
+const MaxDrawsPerTx = 20
+
+// BucketEntry is one already-minted token id and how many units of it are in
+// the bucket. Amount > 1 is how editions are stocked: each unit is a separate
+// prize, so an entry with 50 units is 50x likelier to be drawn than a 1/1.
+type BucketEntry struct {
+	TokenId string `json:"tokenId"`
+	Amount  uint64 `json:"amount"`
+}
+
+// ListBucketPayload creates a bucket. The seller enables single draws, pack
+// draws, or both: a zero/empty price switches that mode off, and at least one
+// must be on. PackSize is fixed for the bucket's lifetime and only matters when
+// PricePerPack is set.
+type ListBucketPayload struct {
+	NftContract     string        `json:"nftContract"`
+	Entries         []BucketEntry `json:"entries"`
+	PaymentToken    string        `json:"paymentToken"`
+	PricePerDraw    string        `json:"pricePerDraw"`
+	PricePerPack    string        `json:"pricePerPack"`
+	PackSize        uint64        `json:"packSize"`
+	ExpirationBlock uint64        `json:"expirationBlock"`
+}
+
+// BuyFromBucketPayload buys from a bucket. Mode "single" draws Quantity times;
+// mode "pack" draws Quantity * packSize times. MaxTotalPrice is the same
+// slippage guard `buy` and `sweep` carry — empty disables it.
+type BuyFromBucketPayload struct {
+	BucketId      uint64 `json:"bucketId"`
+	Mode          string `json:"mode"`
+	Quantity      uint64 `json:"quantity"`
+	MaxTotalPrice string `json:"maxTotalPrice"`
+}
+
+type BucketIdPayload struct {
+	BucketId uint64 `json:"bucketId"`
+}
+
+type BucketListedEvent struct {
+	Type       string                 `json:"type"`
+	Attributes BucketListedAttributes `json:"attributes"`
+	Tx         string                 `json:"tx"`
+}
+
+type BucketListedAttributes struct {
+	BucketId    uint64 `json:"bucketId"`
+	Seller      string `json:"seller"`
+	NftContract string `json:"nftContract"`
+	Entries     uint64 `json:"entries"`
+	Units       uint64 `json:"units"`
+}
+
+// BucketDrawEvent fires once per delivered unit rather than carrying an array,
+// so the indexer gets one row per NFT and can answer "what did this purchase
+// yield" and "who holds it now" without unpacking a list.
+type BucketDrawEvent struct {
+	Type       string               `json:"type"`
+	Attributes BucketDrawAttributes `json:"attributes"`
+	Tx         string               `json:"tx"`
+}
+
+type BucketDrawAttributes struct {
+	BucketId  uint64 `json:"bucketId"`
+	Buyer     string `json:"buyer"`
+	TokenId   string `json:"tokenId"`
+	DrawIndex uint64 `json:"drawIndex"`
+}
+
+type BucketPurchaseEvent struct {
+	Type       string                   `json:"type"`
+	Attributes BucketPurchaseAttributes `json:"attributes"`
+	Tx         string                   `json:"tx"`
+}
+
+type BucketPurchaseAttributes struct {
+	BucketId uint64 `json:"bucketId"`
+	Buyer    string `json:"buyer"`
+	Mode     string `json:"mode"`
+	Draws    uint64 `json:"draws"`
+	Paid     string `json:"paid"`
+	Fee      string `json:"fee"`
+	Royalty  string `json:"royalty"`
+}
+
+// BucketEntryDroppedEvent records an entry pruned mid-draw because the seller
+// no longer holds it or revoked approval. Without this the units simply vanish
+// from the bucket with no on-chain explanation.
+type BucketEntryDroppedEvent struct {
+	Type       string                       `json:"type"`
+	Attributes BucketEntryDroppedAttributes `json:"attributes"`
+	Tx         string                       `json:"tx"`
+}
+
+type BucketEntryDroppedAttributes struct {
+	BucketId uint64 `json:"bucketId"`
+	TokenId  string `json:"tokenId"`
+	Reason   string `json:"reason"`
+}
+
+type BucketDelistedEvent struct {
+	Type       string                   `json:"type"`
+	Attributes BucketDelistedAttributes `json:"attributes"`
+	Tx         string                   `json:"tx"`
+}
+
+type BucketDelistedAttributes struct {
+	BucketId uint64 `json:"bucketId"`
+	Seller   string `json:"seller"`
+}
+
 type ListBundlePayload struct {
 	NftContract     string       `json:"nftContract"`
 	Items           []BundleItem `json:"items"`
