@@ -704,14 +704,19 @@ type BundleItem struct {
 const MaxBucketEntries = 20
 
 // MaxDrawsPerTx caps the draws one transaction may perform (a pack's total, or
-// a run of singles). This is a GAS bound, not a storage one: every draw makes
-// its own cross-contract NFT transfer, and measured cost is ~79M gas per draw —
-// an 8-draw pack came to 633M against a 500M budget. Six keeps a purchase
-// comfortably inside it.
+// a run of singles).
 //
-// Raising this meaningfully (a real 10-card pack) needs the deliveries batched
-// into one magi_nft safeBatchTransferFrom instead of one call per unit.
-const MaxDrawsPerTx = 6
+// The real constraint is RC, not storage: every draw makes its own
+// cross-contract NFT transfer, measured at ~790 RC per draw (an 8-draw pack
+// used 6331). Callers set `rcLimit` themselves — the SDK sends 10000, which is
+// also the free-tier allowance — so 12 draws is what reliably fits a
+// default-limit purchase, and a 10-card pack lands around 7900 RC with room to
+// spare. A funded caller raising rcLimit could afford more; this cap keeps a
+// purchase predictable for everyone else.
+//
+// Batching deliveries into one magi_nft safeBatchTransferFrom would cut the
+// per-draw cost substantially and is the way to lift this further.
+const MaxDrawsPerTx = 12
 
 // MaxBucketPools caps how many pools a pack may draw from. Each pool costs a
 // pass over the entries per draw, so this bounds the work a single purchase can

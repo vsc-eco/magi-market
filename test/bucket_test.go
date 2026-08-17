@@ -291,30 +291,34 @@ func TestBucketPokemonStylePack(t *testing.T) {
 	seller := ownerAddress
 
 	// Enough stock for two packs: 8 commons, 6 uncommons, 2 rares.
-	MintNft(t, ct, seller, "common", 4, 100)
-	MintNft(t, ct, seller, "uncommon", 4, 100)
+	MintNft(t, ct, seller, "common", 8, 100)
+	MintNft(t, ct, seller, "uncommon", 6, 100)
+	MintNft(t, ct, seller, "holo", 4, 100)
 	MintNft(t, ct, seller, "rare", 2, 100)
 	ApproveNftForMarket(t, ct, seller)
 
 	entries := bucketPoolEntriesJSON([][3]string{
-		{"common", "4", "0"},
-		{"uncommon", "4", "1"},
-		{"rare", "2", "2"},
+		{"common", "8", "0"},
+		{"uncommon", "6", "1"},
+		{"holo", "4", "2"},
+		{"rare", "2", "3"},
 	})
-	// 2 commons + 2 uncommons + 1 rare = a 5-card pack. Kept under
-	// MaxDrawsPerTx: each draw is its own NFT transfer, so pack size is bounded
-	// by gas until deliveries are batched.
-	id := listBucket(t, ct, seller, entries, "0", "10000", "[2,2,1]")
+	// A real 10-card pack: 4 commons + 3 uncommons + 2 holos + 1 rare. This is
+	// the shape the feature exists for, and it fits a default-rcLimit purchase.
+	id := listBucket(t, ct, seller, entries, "0", "10000", "[4,3,2,1]")
 
 	// Two buyers so neither runs out of RC mid-test.
 	for _, b := range []string{"hive:packbuyer1", "hive:packbuyer2"} {
 		MintAndApproveToken(t, ct, b, 100000)
 		buy := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
-		CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, b, "", true, gas, "")
+		// `gas` here is a test-side assertion ceiling, not a chain limit — a
+		// 10-draw pack legitimately costs more than a single-item action.
+		CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, b, "", true, uint(1_200_000_000), "")
 
 		// Every pack has exactly the promised shape.
-		assert.Equal(t, uint64(2), QueryNftBalance(t, ct, b, "common"), "2 commons per pack")
-		assert.Equal(t, uint64(2), QueryNftBalance(t, ct, b, "uncommon"), "2 uncommons per pack")
+		assert.Equal(t, uint64(4), QueryNftBalance(t, ct, b, "common"), "4 commons per pack")
+		assert.Equal(t, uint64(3), QueryNftBalance(t, ct, b, "uncommon"), "3 uncommons per pack")
+		assert.Equal(t, uint64(2), QueryNftBalance(t, ct, b, "holo"), "2 holos per pack")
 		assert.Equal(t, uint64(1), QueryNftBalance(t, ct, b, "rare"), "every pack contains its rare")
 	}
 
