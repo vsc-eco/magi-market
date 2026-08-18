@@ -15,6 +15,9 @@ import (
 // and every mint, and accounts share one cumulative RC pool, so more entries
 // exhausts the SELLER before it tests the contract. Raising this needs mintBatch
 // so the setup costs one call instead of one per id.
+// Mirrors the contract's MaxBucketEntries, which the harness cannot import.
+const MaxBucketEntriesContract = 20
+
 const MaxBucketEntriesTest = 5
 
 // Buckets: fixed-price sales where the CONTRACT picks which unit the buyer
@@ -692,4 +695,361 @@ func TestBucketRefusesContractCaller(t *testing.T) {
 	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, attacker, "prize"),
 		"and the refused call must not deliver to the signer either")
 	assert.Equal(t, uint64(4), QueryNftBalance(t, ct, seller, "prize"), "only the direct buy drew a unit")
+}
+
+// ---------------------------------------------------------------------------
+// Validation. Table-driven: every one of these is a distinct way to ask the
+// contract for something incoherent, and each must be refused with a message
+// that says which one it was — a bucket that lists on bad input sells a promise
+// it cannot keep.
+// ---------------------------------------------------------------------------
+
+func TestBucketListValidation(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	MintNft(t, ct, seller, "v1", 4, 100)
+	MintNft(t, ct, seller, "v2", 4, 100)
+	ApproveNftForMarket(t, ct, seller)
+
+	one := bucketEntriesJSON([][2]string{{"v1", "2"}})
+
+	cases := []struct {
+		name    string
+		payload string
+		expect  string
+	}{
+		{"no nft contract",
+			fmt.Sprintf(`{"nftContract":"","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, one, TokenID),
+			"NFT contract and payment token required"},
+		{"no payment token",
+			fmt.Sprintf(`{"nftContract":"%s","entries":%s,"paymentToken":"","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, one),
+			"NFT contract and payment token required"},
+		{"no entries",
+			fmt.Sprintf(`{"nftContract":"%s","entries":[],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
+			"At least one entry required"},
+		{"empty token id",
+			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"","amount":1,"pool":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
+			"Token ID required for each bucket entry"},
+		{"zero amount",
+			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"v1","amount":0,"pool":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
+			"Amount must be greater than zero"},
+		{"pool out of range",
+			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"v1","amount":1,"pool":99}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
+			"Entry pool out of range"},
+		{"no price at all",
+			fmt.Sprintf(`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, one, TokenID),
+			"Set a single-draw price, a pack price, or both"},
+		{"pack price without packDraws",
+			fmt.Sprintf(`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"1000","packDraws":[],"expirationBlock":0}`, NftContractID, one, TokenID),
+			"Pack sales need packDraws"},
+		{"packDraws all zero",
+			fmt.Sprintf(`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"1000","packDraws":[0,0],"expirationBlock":0}`, NftContractID, one, TokenID),
+			"A pack must draw at least one card"},
+		{"pack bigger than the draw cap",
+			fmt.Sprintf(`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"1000","packDraws":[99],"expirationBlock":0}`, NftContractID, one, TokenID),
+			"Pack size exceeds the per-transaction draw cap"},
+		{"too many pools",
+			fmt.Sprintf(`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"1000","packDraws":[1,1,1,1,1,1,1,1,1],"expirationBlock":0}`, NftContractID, one, TokenID),
+			"Too many pools in packDraws"},
+		{"more units than the seller holds",
+			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"v1","amount":999,"pool":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
+			"Insufficient NFT balance to stock bucket"},
+		{"token id with invalid characters",
+			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"bad\",\"from\":\"hive:victim","amount":1,"pool":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
+			"tokenId contains invalid characters"},
+		{"payment token not whitelisted",
+			fmt.Sprintf(`{"nftContract":"%s","entries":%s,"paymentToken":"nosuchtoken","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, one),
+			"not allowed"},
+		{"empty payload", ``, "Payload required"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			CallMarket(t, ct, "listBucket", []byte(c.payload), nil, seller, "", false, gas, c.expect)
+		})
+	}
+}
+
+func TestBucketBuyValidation(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:valbuyer"
+	MintNft(t, ct, seller, "bv", 4, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"bv", "4"}}), "1000", "0", "[]")
+
+	cases := []struct {
+		name    string
+		payload string
+		expect  string
+	}{
+		{"zero quantity",
+			fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":0,"maxTotalPrice":""}`, id),
+			"Quantity must be greater than zero"},
+		{"unknown mode",
+			fmt.Sprintf(`{"bucketId":%d,"mode":"lucky-dip","quantity":1,"maxTotalPrice":""}`, id),
+			"Mode must be"},
+		{"bucket that never existed",
+			`{"bucketId":9999,"mode":"single","quantity":1,"maxTotalPrice":""}`,
+			"Bucket not active"},
+		{"more units than remain",
+			fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":9,"maxTotalPrice":""}`, id),
+			"Not enough units left"},
+		{"empty payload", ``, "Payload required"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			CallMarket(t, ct, "buyFromBucket", []byte(c.payload), nil, buyer, "", false, gas, c.expect)
+		})
+	}
+
+	// None of the refusals touched the bucket.
+	assert.Equal(t, uint64(4), QueryNftBalance(t, ct, seller, "bv"), "refused buys leave the pool intact")
+}
+
+func TestBucketDelistValidation(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	MintNft(t, ct, seller, "dv", 2, 100)
+	ApproveNftForMarket(t, ct, seller)
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"dv", "2"}}), "1000", "0", "[]")
+
+	CallMarket(t, ct, "delistBucket", []byte(``), nil, seller, "", false, gas, "Payload required")
+	CallMarket(t, ct, "delistBucket", []byte(`{"bucketId":9999}`), nil, seller, "", false, gas, "Bucket not active")
+
+	del := fmt.Sprintf(`{"bucketId":%d}`, id)
+	CallMarket(t, ct, "delistBucket", []byte(del), nil, seller, "", true, gas, "")
+	// Delisting twice is refused rather than silently succeeding.
+	CallMarket(t, ct, "delistBucket", []byte(del), nil, seller, "", false, gas, "Bucket not active")
+}
+
+// ---------------------------------------------------------------------------
+// Governance and custody paths: the situations where the world changes AFTER a
+// bucket is listed.
+// ---------------------------------------------------------------------------
+
+// TestBucketPauseStopsTradingButNotDelisting: pausing must stop new listings and
+// purchases, while leaving the seller a way out. Delisting deliberately has no
+// pause check — a paused market must not trap a seller's NFTs in a bucket.
+func TestBucketPauseStopsTradingButNotDelisting(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:pausebuyer"
+	MintNft(t, ct, seller, "pz", 4, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"pz", "4"}}), "1000", "0", "[]")
+
+	CallMarket(t, ct, "pause", nil, nil, ownerAddress, "", true, gas, "")
+
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas, "paused")
+
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
+		NftContractID, bucketEntriesJSON([][2]string{{"pz", "1"}}), TokenID)
+	CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", false, gas, "paused")
+
+	// The seller can still withdraw the bucket while paused.
+	CallMarket(t, ct, "delistBucket", []byte(fmt.Sprintf(`{"bucketId":%d}`, id)), nil, seller, "", true, gas, "")
+	assert.Equal(t, uint64(4), QueryNftBalance(t, ct, seller, "pz"), "custody never moved, so nothing to return")
+}
+
+// TestBucketDeniedCollectionBlocked: denylisting a collection must stop both
+// listing and buying, including for buckets listed before the denial.
+func TestBucketDeniedCollectionBlocked(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:denybuyer"
+	MintNft(t, ct, seller, "dn", 4, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"dn", "4"}}), "1000", "0", "[]")
+
+	deny := fmt.Sprintf(`{"nftContract":"%s"}`, NftContractID)
+	CallMarket(t, ct, "denyCollection", []byte(deny), nil, ownerAddress, "", true, gas, "")
+
+	// Re-validated at buy time, not just at list time.
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas, "denied")
+
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
+		NftContractID, bucketEntriesJSON([][2]string{{"dn", "1"}}), TokenID)
+	CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", false, gas, "denied")
+}
+
+// TestBucketPaymentTokenRemovedAfterListing: a payment token de-whitelisted
+// after a bucket is listed must halt sales, the same re-validation the offer
+// path does.
+func TestBucketPaymentTokenRemovedAfterListing(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:ptbuyer"
+	MintNft(t, ct, seller, "pt1", 4, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"pt1", "4"}}), "1000", "0", "[]")
+
+	CallMarket(t, ct, "removePaymentToken", []byte(fmt.Sprintf(`{"token":"%s"}`, TokenID)),
+		nil, ownerAddress, "", true, gas, "")
+
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas, "not allowed")
+	assert.Equal(t, uint64(4), QueryNftBalance(t, ct, seller, "pt1"), "no units moved")
+}
+
+// TestBucketWorksWithPerTokenAllowance: a seller can authorise the market with a
+// capped ERC-6909 allowance instead of blanket operator approval. Every other
+// bucket test uses setApprovalForAll, so this branch was never exercised.
+func TestBucketWorksWithPerTokenAllowance(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:allowbuyer"
+
+	MintNft(t, ct, seller, "al", 5, 100)
+	// Per-token approve ONLY — deliberately no setApprovalForAll.
+	CallNft(t, ct, "approve",
+		[]byte(fmt.Sprintf(`{"spender":"%s","id":"al","amount":5}`, MarketContractAddress)),
+		nil, seller, true, gas, "")
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"al", "5"}}), "1000", "0", "[]")
+
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, buyer, "al"), "allowance authorises the draw")
+}
+
+// TestBucketAllEntriesStaleAbortsCleanly: pruning covers a bucket that still has
+// something to give. When the seller has emptied it entirely, the purchase must
+// abort — and take nothing with it.
+func TestBucketAllEntriesStaleAbortsCleanly(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:stalebuyer"
+	MintNft(t, ct, seller, "st", 4, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"st", "4"}}), "1000", "0", "[]")
+
+	buyerBefore := QueryTokenBalance(t, ct, buyer)
+
+	// Seller empties the wallet after listing.
+	away := fmt.Sprintf(`{"from":"%s","to":"hive:elsewhere","id":"st","amount":4,"data":""}`, seller)
+	CallNft(t, ct, "safeTransferFrom", []byte(away), nil, seller, true, gas, "")
+
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas, "")
+
+	// The buyer was not charged for a draw that could not be delivered.
+	assert.Equal(t, buyerBefore, QueryTokenBalance(t, ct, buyer), "a failed purchase costs nothing but RC")
+}
+
+// TestBucketFeeOnTransferTokenDistributesReceived: with a payment token that
+// taxes every transfer, the market must distribute what it ACTUALLY received,
+// not the nominal price. Buckets take payment once per purchase rather than per
+// draw, so this needs proving on the pack path too — pricing a pack off the
+// nominal amount would quietly overpay the seller out of pool funds.
+func TestBucketFeeOnTransferTokenDistributesReceived(t *testing.T) {
+	ct := SetupContractTest()
+	initFeeTokenSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:fotbuyer"
+
+	MintNft(t, ct, seller, "fot", 6, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintFeeToken(t, ct, buyer, 100000)
+
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"1000","packDraws":[3],"expirationBlock":0}`,
+		NftContractID, bucketEntriesJSON([][2]string{{"fot", "6"}}), FeeTokenID)
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
+	id := ParseCreated(res).Id
+
+	sellerBefore := QueryFeeTokenBalance(t, ct, seller)
+	buyerBefore := QueryFeeTokenBalance(t, ct, buyer)
+
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
+	_, _, logs := CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
+
+	// One pack price is charged, not three single prices.
+	assert.Equal(t, uint64(1000), buyerBefore-QueryFeeTokenBalance(t, ct, buyer),
+		"buyer debited one nominal pack price")
+
+	// escrowIn received 1000 - floor(1000/100) = 990, and the payout hop is
+	// taxed again: 990 - floor(990/100) = 981. feeBps is 0 in this setup.
+	assert.Equal(t, uint64(981), QueryFeeTokenBalance(t, ct, seller)-sellerBefore,
+		"seller credited the post-payout-fee amount, not the nominal 1000")
+
+	// The purchase event records what was received, proving the balance-delta
+	// is what gets distributed.
+	AssertEventContains(t, logs, "bucket_purchase", `"paid":"990"`)
+
+	// And the pack still delivered its three cards.
+	assert.Equal(t, uint64(3), QueryNftBalance(t, ct, buyer, "fot"), "pack delivered regardless")
+}
+
+// TestBucketRejectsCombinedFeeAndRoyaltyOver100: fee tops out at 10000 bps and
+// royalty at 5000, so the two together can exceed the sale price. Listing must
+// refuse rather than create a bucket whose payout arithmetic cannot balance.
+func TestBucketRejectsCombinedFeeAndRoyaltyOver100(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	MintNft(t, ct, seller, "cf", 2, 100)
+	ApproveNftForMarket(t, ct, seller)
+
+	CallMarket(t, ct, "setFee", []byte(`{"feeBps":8000}`), nil, ownerAddress, "", true, gas, "")
+	splits := fmt.Sprintf(`{"nftContract":"%s","splits":[{"recipient":"hive:artist","bps":3000}]}`, NftContractID)
+	CallMarket(t, ct, "setRoyaltySplits", []byte(splits), nil, ownerAddress, "", true, gas, "")
+
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
+		NftContractID, bucketEntriesJSON([][2]string{{"cf", "2"}}), TokenID)
+	CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", false, gas,
+		"Combined fee and royalty exceed 100%")
+}
+
+// TestBucketRejectsTooManyEntries: the entry cap bounds per-draw work, so it has
+// to be enforced. The refusal happens before any balance check, so this needs no
+// minting — which is the point: an oversized payload is rejected on sight.
+func TestBucketRejectsTooManyEntries(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	entries := make([][2]string, 0, MaxBucketEntriesContract+1)
+	for i := 0; i <= MaxBucketEntriesContract; i++ {
+		entries = append(entries, [2]string{fmt.Sprintf("over%02d", i), "1"})
+	}
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
+		NftContractID, bucketEntriesJSON(entries), TokenID)
+	CallMarket(t, ct, "listBucket", []byte(payload), nil, ownerAddress, "", false, gas,
+		"Too many bucket entries")
 }
