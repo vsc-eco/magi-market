@@ -9,6 +9,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// MaxBucketEntriesTest mirrors the contract constant; the harness cannot import it.
+// Deliberately below the contract's MaxBucketEntries. A larger table cannot be
+// exercised here yet: the seller is also the account that runs InitFullSetup
+// and every mint, and accounts share one cumulative RC pool, so more entries
+// exhausts the SELLER before it tests the contract. Raising this needs mintBatch
+// so the setup costs one call instead of one per id.
+const MaxBucketEntriesTest = 5
+
 // Buckets: fixed-price sales where the CONTRACT picks which unit the buyer
 // gets. These tests pin the behaviour that makes that safe and fair — the draw
 // is weighted by units, every drawn unit is actually delivered, disabled sale
@@ -373,4 +381,84 @@ func TestBucketPackStopsWhenRarePoolEmpties(t *testing.T) {
 	// its promise, so it must refuse.
 	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, b2, "", false, gas, "")
 	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, b2, "c"), "a refused pack delivers nothing")
+}
+
+// TestBucketLargePurchaseFitsDefaultRcLimit: buying several packs at once is the
+// case that scales worst, so pin it. Four 5-card packs is 20 draws in one
+// transaction — this must stay inside the 10000 rcLimit the SDK sends, or the
+// cap is a promise the contract cannot keep.
+func TestBucketLargePurchaseFitsDefaultRcLimit(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:bulkbuyer"
+
+	MintNft(t, ct, seller, "bulk-a", 12, 100)
+	MintNft(t, ct, seller, "bulk-b", 8, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 500000)
+
+	entries := bucketPoolEntriesJSON([][3]string{{"bulk-a", "12", "0"}, {"bulk-b", "8", "1"}})
+	// 3 from pool 0 + 2 from pool 1 = a 5-card pack.
+	id := listBucket(t, ct, seller, entries, "0", "10000", "[3,2]")
+
+	// Four packs in one call = 20 draws.
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":4,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, uint(2_000_000_000), "")
+
+	// Every pack keeps its shape: 4 packs x 3 = 12 from pool 0, 4 x 2 = 8 from pool 1.
+	assert.Equal(t, uint64(12), QueryNftBalance(t, ct, buyer, "bulk-a"), "12 units from pool 0")
+	assert.Equal(t, uint64(8), QueryNftBalance(t, ct, buyer, "bulk-b"), "8 units from pool 1")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "bulk-a"), "seller drained")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "bulk-b"))
+}
+
+// TestBucketWorstCaseRcHeadroom pins the most expensive purchase the contract
+// permits: MaxDrawsPerTx draws against a bucket holding MaxBucketEntries
+// entries. Marginal cost scales with BOTH, since every draw scans the entry
+// table, so the cap is only honest if this fits the 10000 rcLimit the SDK
+// sends. If this starts failing, lower MaxDrawsPerTx rather than hoping.
+func TestBucketWorstCaseRcHeadroom(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:worstcase"
+
+	// 5 ids x 6 units across 2 pools: pool 1 gets 12 units, enough for three
+	// 6-card packs (9 per pool).
+	entries := make([][3]string, 0, MaxBucketEntriesTest)
+	for i := 0; i < MaxBucketEntriesTest; i++ {
+		id := fmt.Sprintf("w%02d", i)
+		MintNft(t, ct, seller, id, 6, 100)
+		pool := "0"
+		if i%2 == 1 {
+			pool = "1"
+		}
+		entries = append(entries, [3]string{id, "6", pool})
+	}
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 500000)
+
+	// 6-card packs (3 from each pool) against a 5-entry table: work per pack is
+	// 6 * (5+4) = 54, so five packs (270) fit and six (324) do not.
+	id := listBucket(t, ct, seller, bucketPoolEntriesJSON(entries), "0", "10000", "[3,3]")
+
+	// Six packs = 36 draws: over both MaxDrawsPerTx and the work bound. Refused
+	// up front with a message the buyer can act on, NOT an opaque "cost limit
+	// exceeded" mid-execution.
+	tooBig := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":6,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(tooBig), nil, buyer, "", false, uint(4_000_000_000),
+		"Too many draws in one transaction")
+
+	// Three packs (18 draws, work 162) must fit the default rcLimit.
+	ok := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":3,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(ok), nil, buyer, "", true, uint(4_000_000_000), "")
+
+	total := uint64(0)
+	for i := 0; i < MaxBucketEntriesTest; i++ {
+		total += QueryNftBalance(t, ct, buyer, fmt.Sprintf("w%02d", i))
+	}
+	assert.Equal(t, uint64(18), total, "18 draws delivered across three packs")
 }

@@ -343,7 +343,15 @@ func ListBucket(payload *string) *string {
 	// owner, so only they may stock one.
 	sellerIsOwner := nftGetOwner(p.NftContract) == caller
 	contractAddr := getContractAddress()
-	seen := make(map[string]bool, len(p.Entries))
+	// Hoisted: the operator approval is per (collection, seller), not per entry.
+	// Asking inside the loop made listing cost scale with entry count for no
+	// reason — a ten-entry bucket could not be listed inside the default
+	// rcLimit at all.
+	operatorApproved := nftIsApprovedForAll(p.NftContract, caller, contractAddr)
+	// A linear scan over at most MaxBucketEntries ids, rather than a map: a
+	// TinyGo string map allocates and hashes for what is a few hundred
+	// comparisons at this size.
+	seenIds := make([]string, 0, len(p.Entries))
 	for _, e := range p.Entries {
 		if e.TokenId == "" {
 			sdk.Abort("Token ID required for each bucket entry")
@@ -357,15 +365,17 @@ func ListBucket(payload *string) *string {
 		}
 		// A duplicate id would split one token's units across two entries and
 		// silently double its draw weight relative to its real supply.
-		if seen[e.TokenId] {
-			sdk.Abort("Duplicate token ID in bucket entries")
+		for _, prev := range seenIds {
+			if prev == e.TokenId {
+				sdk.Abort("Duplicate token ID in bucket entries")
+			}
 		}
-		seen[e.TokenId] = true
+		seenIds = append(seenIds, e.TokenId)
 
 		if nftIsSoulbound(p.NftContract, e.TokenId) && !sellerIsOwner {
 			sdk.Abort("Cannot stock soulbound tokens (only the collection owner can transfer them)")
 		}
-		if !nftIsApprovedForAll(p.NftContract, caller, contractAddr) {
+		if !operatorApproved {
 			if nftAllowanceOf(p.NftContract, caller, contractAddr, e.TokenId) < e.Amount {
 				sdk.Abort("Marketplace not approved as operator or sufficient per-token allowance for this NFT collection")
 			}
@@ -516,6 +526,12 @@ func BuyFromBucket(payload *string) *string {
 
 	if draws > MaxDrawsPerTx {
 		sdk.Abort("Too many draws in one transaction")
+	}
+	// Every draw scans the entry table, so cost scales with both. Refuse an
+	// oversized purchase here, with a message the buyer can act on, rather than
+	// letting it run out of RC mid-execution.
+	if safeMul(draws, safeAdd(getBucketUint64(p.BucketId, "n"), 4)) > MaxDrawWork {
+		sdk.Abort("Purchase too large for this bucket — buy fewer packs at once")
 	}
 	// Short-fill would make a fixed pack price meaningless, so require the
 	// whole purchase to be deliverable up front.

@@ -699,24 +699,45 @@ type BundleItem struct {
 // ===================================
 
 // MaxBucketEntries caps how many distinct token ids one bucket holds. The draw
-// scans entries linearly on every single draw, so this bounds execution cost;
-// it matches the existing bundle/batch item cap.
+// scans entries linearly, so this bounds per-draw work; MaxDrawWork below turns
+// that into a per-purchase bound.
+//
+// UNRESOLVED: listBucket costs ~152 RC per entry and scales cleanly to eight
+// (4 -> 1755 RC, 6 -> 2060, 8 -> 2364), but a ten-entry listing aborted with
+// "cost limit exceeded". That measurement is confounded — in the harness the
+// seller is also the account that runs InitFullSetup and every mint, and
+// accounts have a cumulative RC pool, so ten mints plus a listing may simply
+// exhaust the seller rather than the listing being too expensive. Measure again
+// with mintBatch (one call for many ids) before drawing any conclusion, and
+// only then decide whether this constant needs lowering.
 const MaxBucketEntries = 20
 
-// MaxDrawsPerTx caps the draws one transaction may perform (a pack's total, or
-// a run of singles).
+// MaxDrawsPerTx is an absolute ceiling on the draws one transaction performs.
+// It is a backstop; MaxDrawWork below is the constraint that actually binds.
+const MaxDrawsPerTx = 24
+
+// MaxDrawWork bounds the WORK a purchase may ask for, because RC scales with
+// draws AND with the size of the entry table each draw scans. Measured after
+// the per-draw work was hoisted out (RC, on the default 10000 rcLimit the SDK
+// sends):
 //
-// The real constraint is RC, not storage: every draw makes its own
-// cross-contract NFT transfer, measured at ~790 RC per draw (an 8-draw pack
-// used 6331). Callers set `rcLimit` themselves — the SDK sends 10000, which is
-// also the free-tier allowance — so 12 draws is what reliably fits a
-// default-limit purchase, and a 10-card pack lands around 7900 RC with room to
-// spare. A funded caller raising rcLimit could afford more; this cap keeps a
-// purchase predictable for everyone else.
+//	fixed              ~1840 RC   payment pull, fee/royalty/seller transfers
+//	per draw            ~107 RC
+//	per draw x entry     ~24 RC   the weighted scan
 //
-// Batching deliveries into one magi_nft safeBatchTransferFrom would cut the
-// per-draw cost substantially and is the way to lift this further.
-const MaxDrawsPerTx = 12
+//	10 draws x  4 entries = 3859 RC   (measured)
+//	20 draws x  2 entries = 4927 RC   (measured)
+//	24 draws x 20 entries = ~15800    (measured: "cost limit exceeded")
+//
+// So a flat draw cap is dishonest — 24 draws is fine on a two-entry bucket and
+// impossible on a twenty-entry one. `draws * (entries + 4)` tracks the cost
+// closely enough (107/24 ~= 4.5), and 300 leaves headroom against the 8160 RC
+// a default-limit purchase has left after the fixed cost.
+//
+// The point is to refuse an oversized purchase with a clear message BEFORE
+// taking payment, rather than letting it die deep in execution with an opaque
+// "cost limit exceeded".
+const MaxDrawWork = 300
 
 // MaxBucketPools caps how many pools a pack may draw from. Each pool costs a
 // pass over the entries per draw, so this bounds the work a single purchase can
