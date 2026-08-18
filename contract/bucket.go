@@ -60,13 +60,12 @@ func splitmix64(x uint64) uint64 {
 	return z ^ (z >> 31)
 }
 
-// drawSeed derives the seed for one draw.
+// seedBase folds the environment into an accumulator ONCE per purchase.
 //
-// block.id supplies unpredictability. tx.id, op_index, bucketId and drawIndex
-// are all buyer-known and that is fine — XOR-ing a known value into an unknown
-// one leaves it unknown. They exist only so two buys landing in the same L1
-// block, or two draws inside one pack, do not resolve identically.
-func drawSeed(bucketId, drawIndex uint64) uint64 {
+// This used to be read per draw: three GetEnvKey calls inside the draw loop
+// meant a ten-card pack made thirty env reads for three distinct values that
+// cannot change mid-transaction.
+func seedBase() uint64 {
 	blockId := sdk.GetEnvKey("block.id")
 	if blockId == nil || len(*blockId) < 16 {
 		// Fail loudly rather than quietly drawing from a degenerate seed: an
@@ -75,106 +74,209 @@ func drawSeed(bucketId, drawIndex uint64) uint64 {
 		sdk.Abort("block.id unavailable — cannot draw")
 	}
 	acc := mixSeed(1469598103934665603, *blockId)
-
 	if txId := sdk.GetEnvKey("tx.id"); txId != nil {
 		acc = mixSeed(acc, *txId)
 	}
 	if opIdx := sdk.GetEnvKey("tx.op_index"); opIdx != nil {
 		acc = mixSeed(acc, *opIdx)
 	}
+	return acc
+}
+
+// drawSeed mixes the per-draw salt into the purchase's base seed. Cheap: no
+// state or environment access, just arithmetic.
+func drawSeed(base, bucketId, salt uint64) uint64 {
+	acc := base
 	acc ^= bucketId * 0x9E3779B97F4A7C15
-	acc ^= drawIndex + 0x165667B19E3779F9
+	acc ^= salt + 0x165667B19E3779F9
 	return splitmix64(acc)
 }
 
 // ---- Draw -------------------------------------------------------------
 
-// drawOne picks one unit from the bucket, weighted by units remaining, and
-// returns the token id it landed on. It decrements that entry.
+// bucketTable is one purchase's working copy of a bucket's entries.
 //
-// The seller keeps custody (no escrow), so an entry can go stale between
-// listing and draw — units transferred away, approval revoked. A stale entry is
-// zeroed and the draw retried rather than aborting the purchase; pruning is
-// deterministic, so every validator reaches the same result.
-// drawOne picks from ONE pool. Entries carry their pool id, so a pool is just a
-// filter over the same entry list — no separate storage, and the read cost per
-// draw is unchanged from the single-pile case.
-func drawOne(bucketId uint64, nc, seller string, pool, drawIndex uint64) string {
+// The draw used to re-read every entry's pool and units from state on every
+// attempt of every draw, and re-ask the NFT contract whether each entry was
+// still deliverable per draw. For a ten-card pack over four entries that was
+// hundreds of state reads and thirty cross-contract calls for values that do
+// not change during the purchase. Now the table is read once, decremented in
+// memory, and written back before any external call — which still satisfies
+// CEI, because nothing external runs until the write-back has happened.
+type bucketTable struct {
+	n        uint64
+	tokenIds []string
+	amts     []uint64
+	pools    []uint64
+	dirty    []bool
+	// Deliverability is resolved lazily, once per entry: the seller keeps
+	// custody, so an entry can be stale, but asking again per draw is pure
+	// waste.
+	checked []bool
+	live    []bool
+}
+
+func loadBucketTable(bucketId uint64) *bucketTable {
 	n := getBucketUint64(bucketId, "n")
-	contractAddr := getContractAddress()
-	operatorApproved := nftIsApprovedForAll(nc, seller, contractAddr)
+	t := &bucketTable{
+		n:        n,
+		tokenIds: make([]string, n),
+		amts:     make([]uint64, n),
+		pools:    make([]uint64, n),
+		dirty:    make([]bool, n),
+		checked:  make([]bool, n),
+		live:     make([]bool, n),
+	}
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		t.tokenIds[i] = getBucketField(bucketId, is+"_ti")
+		t.amts[i] = getBucketUint64(bucketId, is+"_amt")
+		t.pools[i] = getBucketUint64(bucketId, is+"_pl")
+	}
+	return t
+}
 
-	// Read every entry's units ONCE per attempt and reuse that slice for both
-	// the total and the weighted walk. Reading them twice (a separate
-	// bucketUnitsRemaining plus the walk) doubled the state reads, and state
-	// reads are what this call's RC bill is made of.
-	amts := make([]uint64, n)
+// flush writes back only the entries this purchase actually changed.
+func (t *bucketTable) flush(bucketId uint64) {
+	for i := uint64(0); i < t.n; i++ {
+		if t.dirty[i] {
+			setBucketUint64(bucketId, strconv.FormatUint(i, 10)+"_amt", t.amts[i])
+		}
+	}
+}
 
+func (t *bucketTable) unitsLeft() uint64 {
+	total := uint64(0)
+	for i := uint64(0); i < t.n; i++ {
+		total = safeAdd(total, t.amts[i])
+	}
+	return total
+}
+
+func (t *bucketTable) poolUnits(pool uint64) uint64 {
+	total := uint64(0)
+	for i := uint64(0); i < t.n; i++ {
+		if t.pools[i] == pool {
+			total = safeAdd(total, t.amts[i])
+		}
+	}
+	return total
+}
+
+// deliverable answers "can the seller still hand this entry over", asking the
+// NFT contract at most once per entry per purchase.
+func (t *bucketTable) deliverable(i uint64, bucketId uint64, nc, seller, contractAddr string, operatorApproved bool) bool {
+	if t.checked[i] {
+		return t.live[i]
+	}
+	t.checked[i] = true
+	tokenId := t.tokenIds[i]
+
+	if !operatorApproved && nftAllowanceOf(nc, seller, contractAddr, tokenId) < 1 {
+		t.live[i] = false
+		t.amts[i] = 0
+		t.dirty[i] = true
+		emitBucketEntryDropped(bucketId, tokenId, "approval revoked")
+		return false
+	}
+	// The seller must still hold what the bucket claims. Read the balance ONCE
+	// and reconcile against it, rather than re-asking per draw.
+	held := nftBalanceOf(nc, seller, tokenId)
+	if held < t.amts[i] {
+		if held == 0 {
+			t.live[i] = false
+			t.amts[i] = 0
+			t.dirty[i] = true
+			emitBucketEntryDropped(bucketId, tokenId, "seller no longer holds it")
+			return false
+		}
+		// Partially moved on: keep what is genuinely still there.
+		t.amts[i] = held
+		t.dirty[i] = true
+	}
+	t.live[i] = true
+	return true
+}
+
+// drawOne picks one unit from a pool, weighted by units remaining, and returns
+// the token id. Purely in-memory apart from the lazy deliverability check.
+func drawOne(t *bucketTable, base, bucketId uint64, nc, seller, contractAddr string, operatorApproved bool, pool, salt uint64) string {
 	// Bounded by the entry count: every attempt either delivers or removes one
 	// entry from play, so this cannot spin.
-	for attempt := uint64(0); attempt <= n; attempt++ {
+	for attempt := uint64(0); attempt <= t.n; attempt++ {
 		total := uint64(0)
-		for i := uint64(0); i < n; i++ {
-			is := strconv.FormatUint(i, 10)
+		for i := uint64(0); i < t.n; i++ {
 			// Entries outside this pool are invisible to the draw. This is what
 			// makes a slot a guarantee: a rare slot can only ever be filled from
 			// the rare pool.
-			if getBucketUint64(bucketId, is+"_pl") != pool {
-				amts[i] = 0
-				continue
+			if t.pools[i] == pool {
+				total = safeAdd(total, t.amts[i])
 			}
-			amts[i] = getBucketUint64(bucketId, is+"_amt")
-			total = safeAdd(total, amts[i])
 		}
 		if total == 0 {
 			sdk.Abort("Bucket pool is sold out")
 		}
 
-		r := drawSeed(bucketId, (drawIndex*(n+1)+attempt)*MaxBucketPools+pool) % total
+		r := drawSeed(base, bucketId, (salt*(t.n+1)+attempt)*MaxBucketPools+pool) % total
 
-		// Walk entries accumulating units until r lands inside one. Weighted by
-		// units with no per-unit storage.
 		acc := uint64(0)
 		idx := uint64(0)
-		for i := uint64(0); i < n; i++ {
-			if amts[i] == 0 {
+		found := false
+		for i := uint64(0); i < t.n; i++ {
+			if t.pools[i] != pool || t.amts[i] == 0 {
 				continue
 			}
-			acc = safeAdd(acc, amts[i])
+			acc = safeAdd(acc, t.amts[i])
 			if r < acc {
 				idx = i
+				found = true
 				break
 			}
 		}
-
-		is := strconv.FormatUint(idx, 10)
-		amt := amts[idx]
-		if amt == 0 {
-			continue
-		}
-		tokenId := getBucketField(bucketId, is+"_ti")
-
-		// Still deliverable? The market never escrowed it.
-		if !operatorApproved && nftAllowanceOf(nc, seller, contractAddr, tokenId) < 1 {
-			setBucketUint64(bucketId, is+"_amt", 0)
-			emitBucketEntryDropped(bucketId, tokenId, "approval revoked")
-			continue
-		}
-		if nftBalanceOf(nc, seller, tokenId) < 1 {
-			setBucketUint64(bucketId, is+"_amt", 0)
-			emitBucketEntryDropped(bucketId, tokenId, "seller no longer holds it")
+		if !found {
 			continue
 		}
 
-		setBucketUint64(bucketId, is+"_amt", amt-1)
-		return tokenId
+		if !t.deliverable(idx, bucketId, nc, seller, contractAddr, operatorApproved) {
+			continue
+		}
+		if t.amts[idx] == 0 {
+			continue
+		}
+
+		t.amts[idx]--
+		t.dirty[idx] = true
+		return t.tokenIds[idx]
 	}
 
 	sdk.Abort("No deliverable entries left in bucket")
 	return ""
 }
 
-// ---- Entrypoints ------------------------------------------------------
+// nftSafeBatchTransferFrom hands over several token ids in ONE cross-contract
+// call. A ten-card pack was making ten separate safeTransferFrom calls, which
+// dominated the purchase's RC bill.
+func nftSafeBatchTransferFrom(nftContract, from, to string, ids []string, amounts []uint64) {
+	idsJSON := "["
+	amtsJSON := "["
+	for i := range ids {
+		if i > 0 {
+			idsJSON += ","
+			amtsJSON += ","
+		}
+		idsJSON += `"` + ids[i] + `"`
+		amtsJSON += strconv.FormatUint(amounts[i], 10)
+	}
+	idsJSON += "]"
+	amtsJSON += "]"
+
+	payload := `{"from":"` + from + `","to":"` + to + `","ids":` + idsJSON +
+		`,"amounts":` + amtsJSON + `,"data":""}`
+	if sdk.ContractCallSimple(nftContract, "safeBatchTransferFrom", payload) == nil {
+		sdk.Abort("safeBatchTransferFrom call failed")
+	}
+}
+
 
 //go:wasmexport listBucket
 func ListBucket(payload *string) *string {
@@ -447,6 +549,10 @@ func BuyFromBucket(payload *string) *string {
 		}
 	}
 
+	// Load the entry table ONCE for the whole purchase. Everything below reads
+	// and decrements this copy; state is written back before any external call.
+	table := loadBucketTable(p.BucketId)
+
 	// Every pool must hold enough for its share of this purchase BEFORE any
 	// money moves. Checking only the grand total would let a pack promising a
 	// rare take payment and then fail mid-delivery.
@@ -457,20 +563,28 @@ func BuyFromBucket(payload *string) *string {
 				want++
 			}
 		}
-		if want > 0 && bucketPoolUnits(p.BucketId, pool) < want {
+		if want > 0 && table.poolUnits(pool) < want {
 			sdk.Abort("Not enough units left in a required pool")
 		}
 	}
 
-	// CEI: every state field this purchase touches is written before any
-	// external call. drawOne decrements entries first, and the sold-out flag is
-	// flipped below — a re-entry through a malicious payment token or NFT
-	// contract must never see units it has already been promised.
+	// Hoisted out of the draw: the operator approval and the contract address
+	// are the same for every draw in the purchase, so asking per draw was ten
+	// identical cross-contract calls for a ten-card pack.
+	contractAddr := getContractAddress()
+	operatorApproved := nftIsApprovedForAll(nc, seller, contractAddr)
+	base := seedBase()
+
 	drawn := make([]string, 0, draws)
 	for i, pool := range plan {
-		drawn = append(drawn, drawOne(p.BucketId, nc, seller, pool, uint64(i)))
+		drawn = append(drawn, drawOne(table, base, p.BucketId, nc, seller, contractAddr, operatorApproved, pool, uint64(i)))
 	}
-	if bucketUnitsRemaining(p.BucketId) == 0 {
+
+	// CEI: flush the decremented table and the sold-out flag BEFORE any external
+	// call, so a re-entry through a malicious payment token or NFT contract
+	// cannot see units it has already been promised.
+	table.flush(p.BucketId)
+	if table.unitsLeft() == 0 {
 		setBucketField(p.BucketId, "act", "0")
 	}
 
@@ -482,11 +596,30 @@ func BuyFromBucket(payload *string) *string {
 	snapRecips, snapBps := loadBucketRoyaltySplitSnapshot(p.BucketId, royaltyRecipient, lockedRoyaltyBps)
 	fee, royTot, sellerPayment := feeAndRoyaltyOf(received, lockedFeeBps, snapRecips, snapBps)
 
-	// Deliver every drawn unit before any payout, so an abort anywhere reverts
-	// the whole purchase. One event per delivered unit — the indexer wants a
-	// row per NFT, not a list it has to unpack.
+	// Deliver everything in ONE batch transfer. Repeated draws of the same
+	// token collapse into one id with a count, so a ten-card pack of four
+	// distinct tokens is a single cross-contract call instead of ten.
+	ids := make([]string, 0, len(drawn))
+	amounts := make([]uint64, 0, len(drawn))
+	for _, tokenId := range drawn {
+		found := false
+		for j := range ids {
+			if ids[j] == tokenId {
+				amounts[j]++
+				found = true
+				break
+			}
+		}
+		if !found {
+			ids = append(ids, tokenId)
+			amounts = append(amounts, 1)
+		}
+	}
+	nftSafeBatchTransferFrom(nc, seller, caller, ids, amounts)
+
+	// One event per delivered unit — the indexer wants a row per NFT, not a
+	// list it has to unpack.
 	for i, tokenId := range drawn {
-		nftSafeTransferFrom(nc, seller, caller, tokenId, 1)
 		emitBucketDraw(p.BucketId, caller, tokenId, uint64(i))
 	}
 
