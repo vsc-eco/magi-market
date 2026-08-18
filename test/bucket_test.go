@@ -2,21 +2,20 @@ package contract_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"vsc-node/lib/test_utils"
+	contract_session "vsc-node/modules/contract/session"
 
 	"github.com/stretchr/testify/assert"
 )
 
-// MaxBucketEntriesTest mirrors the contract constant; the harness cannot import it.
-// Deliberately below the contract's MaxBucketEntries. A larger table cannot be
-// exercised here yet: the seller is also the account that runs InitFullSetup
-// and every mint, and accounts share one cumulative RC pool, so more entries
-// exhausts the SELLER before it tests the contract. Raising this needs mintBatch
-// so the setup costs one call instead of one per id.
-// Mirrors the contract's MaxBucketEntries, which the harness cannot import.
-const MaxBucketEntriesContract = 20
+// Mirrors the contract's own caps. MaxBucketEntries is what a bucket may hold
+// in TOTAL; MaxEntriesPerCall is what one listBucket/addToBucket call may add.
+const MaxBucketEntriesContract = 512
+const MaxEntriesPerCallContract = 24
+const BucketChunkContract = 32
 
 const MaxBucketEntriesTest = 5
 
@@ -1043,13 +1042,275 @@ func TestBucketRejectsTooManyEntries(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
-	entries := make([][2]string, 0, MaxBucketEntriesContract+1)
-	for i := 0; i <= MaxBucketEntriesContract; i++ {
-		entries = append(entries, [2]string{fmt.Sprintf("over%02d", i), "1"})
+	entries := make([][2]string, 0, MaxEntriesPerCallContract+1)
+	for i := 0; i <= MaxEntriesPerCallContract; i++ {
+		entries = append(entries, [2]string{fmt.Sprintf("over%03d", i), "1"})
 	}
 	payload := fmt.Sprintf(
 		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
 		NftContractID, bucketEntriesJSON(entries), TokenID)
 	CallMarket(t, ct, "listBucket", []byte(payload), nil, ownerAddress, "", false, gas,
-		"Too many bucket entries")
+		"Too many bucket entries in one call")
+}
+
+// ===================================
+// addToBucket — stocking a bucket across several transactions
+// ===================================
+
+// stockBucket lists a bucket and then restocks it until it holds `total`
+// entries, which is the only way to build a large one: no single transaction
+// can afford to write hundreds of entries.
+func stockBucket(t *testing.T, ct *test_utils.ContractTest, seller string, ids []string, perCall int, packDraws string) uint64 {
+	first := perCall
+	if first > len(ids) {
+		first = len(ids)
+	}
+	entries := make([][2]string, 0, first)
+	for _, id := range ids[:first] {
+		entries = append(entries, [2]string{id, "1"})
+	}
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"9000","packDraws":%s,"expirationBlock":0}`,
+		NftContractID, bucketEntriesJSON(entries), TokenID, packDraws)
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, bigGas, "")
+	id := ParseCreated(res).Id
+
+	for off := first; off < len(ids); off += perCall {
+		end := off + perCall
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batch := make([][2]string, 0, end-off)
+		for _, tid := range ids[off:end] {
+			batch = append(batch, [2]string{tid, "1"})
+		}
+		add := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id, bucketEntriesJSON(batch))
+		CallMarket(t, ct, "addToBucket", []byte(add), nil, seller, "", true, bigGas, "")
+	}
+	return id
+}
+
+func TestBucketAddToBucketStocksMore(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+	seller := ownerAddress
+	buyer := "hive:restockbuyer"
+
+	MintNftBatch(t, ct, seller, []string{"r1", "r2", "r3", "r4"}, 1, 1)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	entries := [][2]string{{"r1", "1"}, {"r2", "1"}}
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
+		NftContractID, bucketEntriesJSON(entries), TokenID)
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
+	id := ParseCreated(res).Id
+
+	add := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id,
+		bucketEntriesJSON([][2]string{{"r3", "1"}, {"r4", "1"}}))
+	_, _, logs := CallMarket(t, ct, "addToBucket", []byte(add), nil, seller, "", true, gas, "")
+	AssertEventEmitted(t, logs, "bucket_restocked")
+	AssertEventContains(t, logs, "bucket_restocked", `"totalEntries":4`)
+
+	// All four units must be drawable: the restocked entries are not second
+	// class, and the draw must see the whole bucket, not just the first batch.
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	for i := 0; i < 4; i++ {
+		CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
+	}
+	for _, tid := range []string{"r1", "r2", "r3", "r4"} {
+		assert.Equal(t, uint64(1), QueryNftBalance(t, ct, buyer, tid))
+	}
+	// Drained, so the bucket deactivates — the restock did not corrupt the count.
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas, "Bucket not active")
+}
+
+func TestBucketAddToBucketValidation(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+	seller := ownerAddress
+	other := "hive:notseller"
+
+	MintNftBatch(t, ct, seller, []string{"v1", "v2", "v3"}, 1, 1)
+	ApproveNftForMarket(t, ct, seller)
+
+	entries := [][2]string{{"v1", "1"}}
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
+		NftContractID, bucketEntriesJSON(entries), TokenID)
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
+	id := ParseCreated(res).Id
+
+	cases := []struct {
+		name    string
+		caller  string
+		payload string
+		errMsg  string
+	}{
+		{"empty payload", seller, ``, "Payload required"},
+		{"no entries", seller,
+			fmt.Sprintf(`{"bucketId":%d,"entries":[]}`, id), "At least one entry required"},
+		{"not the seller", other,
+			fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id, bucketEntriesJSON([][2]string{{"v2", "1"}})),
+			"Only seller can add to bucket"},
+		{"unknown bucket", seller,
+			fmt.Sprintf(`{"bucketId":999,"entries":%s}`, bucketEntriesJSON([][2]string{{"v2", "1"}})),
+			"Bucket not active"},
+		// The presence marker, not a scan: a token already in the bucket would
+		// otherwise get a second entry and silently double its own odds.
+		{"already stocked", seller,
+			fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id, bucketEntriesJSON([][2]string{{"v1", "1"}})),
+			"Token ID already stocked in this bucket"},
+		{"duplicate within the batch", seller,
+			fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id,
+				bucketEntriesJSON([][2]string{{"v2", "1"}, {"v2", "1"}})),
+			"Duplicate token ID in bucket entries"},
+		{"more units than held", seller,
+			fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id, bucketEntriesJSON([][2]string{{"v2", "5"}})),
+			"Insufficient NFT balance"},
+		{"zero amount", seller,
+			fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id, bucketEntriesJSON([][2]string{{"v2", "0"}})),
+			"Amount must be greater than zero"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			CallMarket(t, ct, "addToBucket", []byte(c.payload), nil, c.caller, "", false, gas, c.errMsg)
+		})
+	}
+
+	// Over the per-call cap.
+	big := make([][2]string, 0, MaxEntriesPerCallContract+1)
+	for i := 0; i <= MaxEntriesPerCallContract; i++ {
+		big = append(big, [2]string{fmt.Sprintf("big%03d", i), "1"})
+	}
+	CallMarket(t, ct, "addToBucket",
+		[]byte(fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id, bucketEntriesJSON(big))),
+		nil, seller, "", false, gas, "Too many bucket entries in one call")
+
+	// Pausing halts restocking, exactly as it halts listing.
+	CallMarket(t, ct, "pause", []byte(`{}`), nil, ownerAddress, "", true, gas, "")
+	CallMarket(t, ct, "addToBucket",
+		[]byte(fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id, bucketEntriesJSON([][2]string{{"v2", "1"}}))),
+		nil, seller, "", false, gas, "paused")
+	CallMarket(t, ct, "unpause", []byte(`{}`), nil, ownerAddress, "", true, gas, "")
+
+	// A delisted bucket cannot be revived by restocking it.
+	CallMarket(t, ct, "delistBucket", []byte(fmt.Sprintf(`{"bucketId":%d}`, id)), nil, seller, "", true, gas, "")
+	CallMarket(t, ct, "addToBucket",
+		[]byte(fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id, bucketEntriesJSON([][2]string{{"v2", "1"}}))),
+		nil, seller, "", false, gas, "Bucket not active")
+}
+
+// drawnTokenIds pulls the token ids out of the bucket_draw events of one call.
+func drawnTokenIds(logs map[string]contract_session.LogOutput) []string {
+	var ids []string
+	for _, e := range FindEventsInLogs(logs, "bucket_draw") {
+		const k = `"tokenId":"`
+		i := strings.Index(e, k)
+		if i < 0 {
+			continue
+		}
+		rest := e[i+len(k):]
+		j := strings.Index(rest, `"`)
+		if j < 0 {
+			continue
+		}
+		ids = append(ids, rest[:j])
+	}
+	return ids
+}
+
+// TestBucketFiveHundredDistinctCards is the case the chunked layout exists for.
+//
+// Under the old flat layout a draw read and scanned every entry, so this bucket
+// was not merely expensive but IMPOSSIBLE: a single draw over 500 entries needed
+// roughly 14k RC against a 10k limit, and listing them needed 77k. Both now fit,
+// and the point of the test is that they fit with the whole bucket in play —
+// not just the first chunk of it.
+func TestBucketFiveHundredDistinctCards(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+	seller := ownerAddress
+	buyer := "hive:bigbuyer"
+
+	// The seller mints 500 NFTs and makes eight stocking calls here; without
+	// funding, the 10k free tier is gone long before the bucket is built.
+	FundRc(ct, seller, 5_000_000)
+	FundRc(ct, buyer, 5_000_000)
+
+	const total = 500
+	ids := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		ids = append(ids, fmt.Sprintf("card%03d", i))
+	}
+	MintNftBatch(t, ct, seller, ids, 1, 1)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 1000000)
+
+	fmt.Printf("\n>>> BIG stocking %d distinct entries\n", total)
+	id := stockBucket(t, ct, seller, ids, MaxEntriesPerCallContract, "[10]")
+
+	fmt.Printf("\n>>> BIG single draw over %d entries\n", total)
+	single := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	_, _, logs := CallMarket(t, ct, "buyFromBucket", []byte(single), nil, buyer, "", true, bigGas, "")
+	got := drawnTokenIds(logs)
+	assert.Len(t, got, 1, "a single draw delivers exactly one card")
+
+	fmt.Printf("\n>>> BIG 10-card pack over %d entries\n", total)
+	pack := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
+	_, _, packLogs := CallMarket(t, ct, "buyFromBucket", []byte(pack), nil, buyer, "", true, bigGas, "")
+	packed := drawnTokenIds(packLogs)
+	assert.Len(t, packed, 10, "a [10] pack delivers ten cards")
+
+	// The buyer holds every card drawn, and no card was handed over twice —
+	// each entry has exactly one unit, so a double delivery would mean the
+	// chunk sums and the slots had drifted apart.
+	seen := map[string]bool{}
+	for _, tid := range append(got, packed...) {
+		assert.False(t, seen[tid], "card %s was drawn twice from single-unit entries", tid)
+		seen[tid] = true
+		assert.Equal(t, uint64(1), QueryNftBalance(t, ct, buyer, tid))
+	}
+
+	// Draws must reach past the first chunk. A chunk-walk that never advanced
+	// would still pass every test above while quietly confining the entire
+	// bucket's odds to its first 32 entries, so pull enough draws to make that
+	// overwhelmingly unlikely to happen by chance.
+	beyondFirstChunk := false
+	for i := 0; i < 6; i++ {
+		_, _, l := CallMarket(t, ct, "buyFromBucket", []byte(pack), nil, buyer, "", true, bigGas, "")
+		for _, tid := range drawnTokenIds(l) {
+			var n int
+			fmt.Sscanf(tid, "card%03d", &n)
+			if n >= BucketChunkContract {
+				beyondFirstChunk = true
+			}
+		}
+	}
+	assert.True(t, beyondFirstChunk,
+		"every draw landed in the first chunk — the chunk walk is not advancing")
+}
+
+// TestBucketRejectsOverfullBucket proves the total cap is enforced across
+// calls, not just within one.
+func TestBucketRejectsOverfullBucket(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+	seller := ownerAddress
+
+	FundRc(ct, seller, 5_000_000)
+
+	// Fill to the cap, then try to add one more.
+	ids := make([]string, 0, MaxBucketEntriesContract+1)
+	for i := 0; i <= MaxBucketEntriesContract; i++ {
+		ids = append(ids, fmt.Sprintf("full%03d", i))
+	}
+	MintNftBatch(t, ct, seller, ids, 1, 1)
+	ApproveNftForMarket(t, ct, seller)
+
+	id := stockBucket(t, ct, seller, ids[:MaxBucketEntriesContract], MaxEntriesPerCallContract, "[1]")
+	over := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id,
+		bucketEntriesJSON([][2]string{{ids[MaxBucketEntriesContract], "1"}}))
+	CallMarket(t, ct, "addToBucket", []byte(over), nil, seller, "", false, gas, "Bucket is full")
 }

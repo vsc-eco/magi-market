@@ -94,159 +94,192 @@ func drawSeed(base, bucketId, salt uint64) uint64 {
 
 // ---- Draw -------------------------------------------------------------
 
-// bucketTable is one purchase's working copy of a bucket's entries.
+// MaxStaleRetries bounds how many stale entries one draw will prune before
+// giving up. The seller keeps custody, so entries CAN go stale — they sold or
+// moved the unit elsewhere — and pruning them is the right response. But each
+// prune costs a cross-contract call, so an all-stale bucket of five hundred
+// entries would burn the buyer's entire rcLimit discovering that. Prune a
+// bounded number and refuse, rather than failing expensively.
+const MaxStaleRetries = 12
+
+// bucketDraw is one purchase's working set.
 //
-// The draw used to re-read every entry's pool and units from state on every
-// attempt of every draw, and re-ask the NFT contract whether each entry was
-// still deliverable per draw. For a ten-card pack over four entries that was
-// hundreds of state reads and thirty cross-contract calls for values that do
-// not change during the purchase. Now the table is read once, decremented in
-// memory, and written back before any external call — which still satisfies
-// CEI, because nothing external runs until the write-back has happened.
-type bucketTable struct {
-	n        uint64
-	tokenIds []string
-	amts     []uint64
-	pools    []uint64
-	dirty    []bool
-	// Deliverability is resolved lazily, once per entry: the seller keeps
-	// custody, so an entry can be stale, but asking again per draw is pure
-	// waste.
-	checked []bool
-	live    []bool
+// Pool counters and chunk sums are read once and kept in memory: a ten-card
+// pack re-walking the chunk sums from state on every draw would pay for the
+// same handful of values ten times. Slots are written through as they change,
+// since each draw touches a different one; the counters are flushed before any
+// external call, which is what keeps CEI intact.
+type bucketDraw struct {
+	id     uint64
+	loaded []bool
+	nSlots []uint64
+	units  []uint64
+	chunks [][]uint64
+	dirty  []bool
+	total  uint64
+
+	// Deliverability is asked at most once per entry per purchase. Only entries
+	// actually drawn are ever checked, so this stays small — the old code had to
+	// check every entry in the bucket.
+	ckPool []uint64
+	ckIdx  []uint64
+	ckLive []bool
 }
 
-func loadBucketTable(bucketId uint64) *bucketTable {
-	n := getBucketUint64(bucketId, "n")
-	t := &bucketTable{
-		n:        n,
-		tokenIds: make([]string, n),
-		amts:     make([]uint64, n),
-		pools:    make([]uint64, n),
-		dirty:    make([]bool, n),
-		checked:  make([]bool, n),
-		live:     make([]bool, n),
+func newBucketDraw(id uint64) *bucketDraw {
+	return &bucketDraw{
+		id:     id,
+		loaded: make([]bool, MaxBucketPools),
+		nSlots: make([]uint64, MaxBucketPools),
+		units:  make([]uint64, MaxBucketPools),
+		chunks: make([][]uint64, MaxBucketPools),
+		dirty:  make([]bool, MaxBucketPools),
+		total:  bucketUnitsRemaining(id),
 	}
-	for i := uint64(0); i < n; i++ {
-		is := strconv.FormatUint(i, 10)
-		t.tokenIds[i] = getBucketField(bucketId, is+"_ti")
-		t.amts[i] = getBucketUint64(bucketId, is+"_amt")
-		t.pools[i] = getBucketUint64(bucketId, is+"_pl")
-	}
-	return t
 }
 
-// flush writes back only the entries this purchase actually changed.
-func (t *bucketTable) flush(bucketId uint64) {
-	for i := uint64(0); i < t.n; i++ {
-		if t.dirty[i] {
-			setBucketUint64(bucketId, strconv.FormatUint(i, 10)+"_amt", t.amts[i])
+func (d *bucketDraw) load(pool uint64) {
+	if d.loaded[pool] {
+		return
+	}
+	d.loaded[pool] = true
+	n := bucketPoolSlots(d.id, pool)
+	d.nSlots[pool] = n
+	d.units[pool] = bucketPoolUnits(d.id, pool)
+	nc := (n + BucketChunk - 1) / BucketChunk
+	cs := make([]uint64, nc)
+	for j := uint64(0); j < nc; j++ {
+		cs[j] = getBucketUint64(d.id, chunkField(pool, j))
+	}
+	d.chunks[pool] = cs
+}
+
+func (d *bucketDraw) poolUnits(pool uint64) uint64 {
+	d.load(pool)
+	return d.units[pool]
+}
+
+// locate maps a unit offset r in [0, units) onto the slot holding it, walking
+// the chunk sums first so only one chunk is ever scanned.
+func (d *bucketDraw) locate(pool, r uint64) (uint64, uint64, string, bool) {
+	d.load(pool)
+	acc := uint64(0)
+	for j := range d.chunks[pool] {
+		c := d.chunks[pool][j]
+		if r < safeAdd(acc, c) {
+			base := uint64(j) * BucketChunk
+			end := safeAdd(base, BucketChunk)
+			if end > d.nSlots[pool] {
+				end = d.nSlots[pool]
+			}
+			for i := base; i < end; i++ {
+				amt, tokenId := getBucketSlot(d.id, pool, i)
+				if amt == 0 {
+					continue
+				}
+				if r < safeAdd(acc, amt) {
+					return i, amt, tokenId, true
+				}
+				acc = safeAdd(acc, amt)
+			}
+			return 0, 0, "", false
+		}
+		acc = safeAdd(acc, c)
+	}
+	return 0, 0, "", false
+}
+
+// take removes `n` units from a slot, keeping every cached sum in step.
+func (d *bucketDraw) take(pool, idx, n, amt uint64, tokenId string) {
+	setBucketSlot(d.id, pool, idx, amt-n, tokenId)
+	d.chunks[pool][idx/BucketChunk] -= n
+	d.units[pool] -= n
+	d.total -= n
+	d.dirty[pool] = true
+}
+
+// flush writes back the counters this purchase changed. Called BEFORE any
+// external call: a re-entry must never see units that have already been
+// promised to this buyer.
+func (d *bucketDraw) flush() {
+	for pool := uint64(0); pool < MaxBucketPools; pool++ {
+		if !d.dirty[pool] {
+			continue
+		}
+		setBucketUint64(d.id, poolPrefix(pool)+"u", d.units[pool])
+		for j := range d.chunks[pool] {
+			setBucketUint64(d.id, chunkField(pool, uint64(j)), d.chunks[pool][j])
 		}
 	}
+	setBucketUint64(d.id, "u", d.total)
 }
 
-func (t *bucketTable) unitsLeft() uint64 {
-	total := uint64(0)
-	for i := uint64(0); i < t.n; i++ {
-		total = safeAdd(total, t.amts[i])
-	}
-	return total
-}
-
-func (t *bucketTable) poolUnits(pool uint64) uint64 {
-	total := uint64(0)
-	for i := uint64(0); i < t.n; i++ {
-		if t.pools[i] == pool {
-			total = safeAdd(total, t.amts[i])
+// deliverable answers "can the seller still hand this entry over", and returns
+// the units genuinely still backed. Asked at most once per entry per purchase.
+func (d *bucketDraw) deliverable(pool, idx, amt uint64, tokenId, nc, seller, contractAddr string, operatorApproved bool) (uint64, bool) {
+	for i := range d.ckPool {
+		if d.ckPool[i] == pool && d.ckIdx[i] == idx {
+			if !d.ckLive[i] {
+				return 0, false
+			}
+			return amt, true
 		}
 	}
-	return total
-}
 
-// deliverable answers "can the seller still hand this entry over", asking the
-// NFT contract at most once per entry per purchase.
-func (t *bucketTable) deliverable(i uint64, bucketId uint64, nc, seller, contractAddr string, operatorApproved bool) bool {
-	if t.checked[i] {
-		return t.live[i]
-	}
-	t.checked[i] = true
-	tokenId := t.tokenIds[i]
-
+	live := true
+	backed := amt
 	if !operatorApproved && nftAllowanceOf(nc, seller, contractAddr, tokenId) < 1 {
-		t.live[i] = false
-		t.amts[i] = 0
-		t.dirty[i] = true
-		emitBucketEntryDropped(bucketId, tokenId, "approval revoked")
-		return false
-	}
-	// The seller must still hold what the bucket claims. Read the balance ONCE
-	// and reconcile against it, rather than re-asking per draw.
-	held := nftBalanceOf(nc, seller, tokenId)
-	if held < t.amts[i] {
+		live = false
+		emitBucketEntryDropped(d.id, tokenId, "approval revoked")
+	} else if held := nftBalanceOf(nc, seller, tokenId); held < amt {
 		if held == 0 {
-			t.live[i] = false
-			t.amts[i] = 0
-			t.dirty[i] = true
-			emitBucketEntryDropped(bucketId, tokenId, "seller no longer holds it")
-			return false
+			live = false
+			emitBucketEntryDropped(d.id, tokenId, "seller no longer holds it")
+		} else {
+			// Partially moved on: keep what is genuinely still there.
+			backed = held
+			d.take(pool, idx, amt-held, amt, tokenId)
 		}
-		// Partially moved on: keep what is genuinely still there.
-		t.amts[i] = held
-		t.dirty[i] = true
 	}
-	t.live[i] = true
-	return true
+
+	d.ckPool = append(d.ckPool, pool)
+	d.ckIdx = append(d.ckIdx, idx)
+	d.ckLive = append(d.ckLive, live)
+	if !live {
+		return 0, false
+	}
+	return backed, true
 }
 
 // drawOne picks one unit from a pool, weighted by units remaining, and returns
-// the token id. Purely in-memory apart from the lazy deliverability check.
-func drawOne(t *bucketTable, base, bucketId uint64, nc, seller, contractAddr string, operatorApproved bool, pool, salt uint64) string {
-	// Bounded by the entry count: every attempt either delivers or removes one
-	// entry from play, so this cannot spin.
-	for attempt := uint64(0); attempt <= t.n; attempt++ {
-		total := uint64(0)
-		for i := uint64(0); i < t.n; i++ {
-			// Entries outside this pool are invisible to the draw. This is what
-			// makes a slot a guarantee: a rare slot can only ever be filled from
-			// the rare pool.
-			if t.pools[i] == pool {
-				total = safeAdd(total, t.amts[i])
-			}
-		}
+// the token id.
+func drawOne(d *bucketDraw, base, bucketId uint64, nc, seller, contractAddr string, operatorApproved bool, pool, salt uint64) string {
+	attempts := d.nSlots[pool]
+	if attempts > MaxStaleRetries {
+		attempts = MaxStaleRetries
+	}
+	for attempt := uint64(0); attempt <= attempts; attempt++ {
+		total := d.poolUnits(pool)
 		if total == 0 {
 			sdk.Abort("Bucket pool is sold out")
 		}
 
-		r := drawSeed(base, bucketId, (salt*(t.n+1)+attempt)*MaxBucketPools+pool) % total
+		r := drawSeed(base, bucketId, (salt*(d.nSlots[pool]+1)+attempt)*MaxBucketPools+pool) % total
 
-		acc := uint64(0)
-		idx := uint64(0)
-		found := false
-		for i := uint64(0); i < t.n; i++ {
-			if t.pools[i] != pool || t.amts[i] == 0 {
-				continue
-			}
-			acc = safeAdd(acc, t.amts[i])
-			if r < acc {
-				idx = i
-				found = true
-				break
-			}
-		}
+		idx, amt, tokenId, found := d.locate(pool, r)
 		if !found {
-			continue
+			sdk.Abort("Bucket entry table is inconsistent")
 		}
 
-		if !t.deliverable(idx, bucketId, nc, seller, contractAddr, operatorApproved) {
+		backed, ok := d.deliverable(pool, idx, amt, tokenId, nc, seller, contractAddr, operatorApproved)
+		if !ok {
+			// Take the whole stale entry out of play so the redraw cannot find
+			// it again, and so later buyers do not pay to rediscover it.
+			d.take(pool, idx, amt, amt, tokenId)
 			continue
 		}
-		if t.amts[idx] == 0 {
-			continue
-		}
-
-		t.amts[idx]--
-		t.dirty[idx] = true
-		return t.tokenIds[idx]
+		d.take(pool, idx, 1, backed, tokenId)
+		return tokenId
 	}
 
 	sdk.Abort("No deliverable entries left in bucket")
@@ -277,6 +310,58 @@ func nftSafeBatchTransferFrom(nftContract, from, to string, ids []string, amount
 	}
 }
 
+// assertEntriesStockable runs the per-entry checks shared by listBucket and
+// addToBucket: the ids are well-formed, not already stocked, transferable, and
+// genuinely backed by units the seller holds and has authorised.
+//
+// `existing` says whether the bucket already holds entries. A fresh bucket only
+// has to be checked against the batch in hand; a restock also has to be checked
+// against what is already in state, which is what the presence markers are for.
+func assertEntriesStockable(bucketId uint64, existing bool, nftContract, caller, contractAddr string, sellerIsOwner, operatorApproved bool, entries []BucketEntry) {
+	// A linear scan over at most MaxEntriesPerCall ids, rather than a map: a
+	// TinyGo string map allocates and hashes for what is a few hundred
+	// comparisons at this size.
+	seenIds := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.TokenId == "" {
+			sdk.Abort("Token ID required for each bucket entry")
+		}
+		assertValidTokenId(e.TokenId)
+		if e.Amount == 0 {
+			sdk.Abort("Amount must be greater than zero for each bucket entry")
+		}
+		if e.Pool >= MaxBucketPools {
+			sdk.Abort("Entry pool out of range")
+		}
+		// A duplicate id would split one token's units across two entries and
+		// silently double its draw weight relative to its real supply.
+		for _, prev := range seenIds {
+			if prev == e.TokenId {
+				sdk.Abort("Duplicate token ID in bucket entries")
+			}
+		}
+		seenIds = append(seenIds, e.TokenId)
+		if existing && hasBucketToken(bucketId, e.TokenId) {
+			sdk.Abort("Token ID already stocked in this bucket")
+		}
+
+		// Order matters: `sellerIsOwner` is one comparison, the soulbound flag is
+		// a state read per entry. Testing it first skipped that read entirely for
+		// a collection owner stocking their own bucket — which is the common
+		// case, and the one where entry counts get large.
+		if !sellerIsOwner && nftIsSoulbound(nftContract, e.TokenId) {
+			sdk.Abort("Cannot stock soulbound tokens (only the collection owner can transfer them)")
+		}
+		if !operatorApproved {
+			if nftAllowanceOf(nftContract, caller, contractAddr, e.TokenId) < e.Amount {
+				sdk.Abort("Marketplace not approved as operator or sufficient per-token allowance for this NFT collection")
+			}
+		}
+		if nftBalanceOf(nftContract, caller, e.TokenId) < e.Amount {
+			sdk.Abort("Insufficient NFT balance to stock bucket")
+		}
+	}
+}
 
 //go:wasmexport listBucket
 func ListBucket(payload *string) *string {
@@ -302,8 +387,8 @@ func ListBucket(payload *string) *string {
 	if len(p.Entries) == 0 {
 		sdk.Abort("At least one entry required")
 	}
-	if len(p.Entries) > MaxBucketEntries {
-		sdk.Abort("Too many bucket entries")
+	if len(p.Entries) > MaxEntriesPerCall {
+		sdk.Abort("Too many bucket entries in one call — use addToBucket for the rest")
 	}
 
 	priceSingle := parseMoney(p.PricePerDraw)
@@ -348,42 +433,7 @@ func ListBucket(payload *string) *string {
 	// reason — a ten-entry bucket could not be listed inside the default
 	// rcLimit at all.
 	operatorApproved := nftIsApprovedForAll(p.NftContract, caller, contractAddr)
-	// A linear scan over at most MaxBucketEntries ids, rather than a map: a
-	// TinyGo string map allocates and hashes for what is a few hundred
-	// comparisons at this size.
-	seenIds := make([]string, 0, len(p.Entries))
-	for _, e := range p.Entries {
-		if e.TokenId == "" {
-			sdk.Abort("Token ID required for each bucket entry")
-		}
-		assertValidTokenId(e.TokenId)
-		if e.Amount == 0 {
-			sdk.Abort("Amount must be greater than zero for each bucket entry")
-		}
-		if e.Pool >= MaxBucketPools {
-			sdk.Abort("Entry pool out of range")
-		}
-		// A duplicate id would split one token's units across two entries and
-		// silently double its draw weight relative to its real supply.
-		for _, prev := range seenIds {
-			if prev == e.TokenId {
-				sdk.Abort("Duplicate token ID in bucket entries")
-			}
-		}
-		seenIds = append(seenIds, e.TokenId)
-
-		if nftIsSoulbound(p.NftContract, e.TokenId) && !sellerIsOwner {
-			sdk.Abort("Cannot stock soulbound tokens (only the collection owner can transfer them)")
-		}
-		if !operatorApproved {
-			if nftAllowanceOf(p.NftContract, caller, contractAddr, e.TokenId) < e.Amount {
-				sdk.Abort("Marketplace not approved as operator or sufficient per-token allowance for this NFT collection")
-			}
-		}
-		if nftBalanceOf(p.NftContract, caller, e.TokenId) < e.Amount {
-			sdk.Abort("Insufficient NFT balance to stock bucket")
-		}
-	}
+	assertEntriesStockable(0, false, p.NftContract, caller, contractAddr, sellerIsOwner, operatorApproved, p.Entries)
 
 	// Every slot a pack promises must actually be stocked, or the bucket would
 	// sell a guarantee it cannot keep. Same for pool 0 when single draws are on.
@@ -423,15 +473,7 @@ func ListBucket(payload *string) *string {
 	setBucketMoney(id, "pp", pricePack)
 	setBucketField(id, "act", "1")
 	setBucketUint64(id, "exp", p.ExpirationBlock)
-	setBucketUint64(id, "n", uint64(len(p.Entries)))
-	units := uint64(0)
-	for i, e := range p.Entries {
-		is := strconv.FormatUint(uint64(i), 10)
-		setBucketField(id, is+"_ti", e.TokenId)
-		setBucketUint64(id, is+"_amt", e.Amount)
-		setBucketUint64(id, is+"_pl", e.Pool)
-		units = safeAdd(units, e.Amount)
-	}
+	units := appendBucketEntries(id, p.Entries)
 	setBucketUint64(id, "pd_n", uint64(len(p.PackDraws)))
 	for j, d := range p.PackDraws {
 		setBucketUint64(id, "pd_"+strconv.FormatUint(uint64(j), 10), d)
@@ -447,6 +489,64 @@ func ListBucket(payload *string) *string {
 
 	emitBucketListed(id, caller, p.NftContract, uint64(len(p.Entries)), units)
 	return jsonResponse(&CreatedResponse{Success: true, Id: id})
+}
+
+//go:wasmexport addToBucket
+func AddToBucket(payload *string) *string {
+	assertInit()
+	assertNotPaused()
+
+	caller := getCaller()
+
+	if payload == nil || *payload == "" {
+		sdk.Abort("Payload required")
+	}
+
+	var p AddToBucketPayload
+	r := jlexer.Lexer{Data: []byte(*payload)}
+	p.UnmarshalTinyJSON(&r)
+	if r.Error() != nil {
+		sdk.Abort("Invalid payload")
+	}
+
+	// A sold-out bucket has already been deactivated, so it cannot be restocked
+	// — and neither can a delisted one, which is the point: reviving a bucket
+	// the seller deliberately closed should not be a side effect of restocking.
+	// List a new bucket instead.
+	if !isBucketActive(p.BucketId) {
+		sdk.Abort("Bucket not active")
+	}
+	if getBucketField(p.BucketId, "s") != caller {
+		sdk.Abort("Only seller can add to bucket")
+	}
+	if isExpired(getBucketUint64(p.BucketId, "exp")) {
+		sdk.Abort("Bucket has expired")
+	}
+	if len(p.Entries) == 0 {
+		sdk.Abort("At least one entry required")
+	}
+	if len(p.Entries) > MaxEntriesPerCall {
+		sdk.Abort("Too many bucket entries in one call — split across several calls")
+	}
+	total := safeAdd(getBucketUint64(p.BucketId, "n"), uint64(len(p.Entries)))
+	if total > MaxBucketEntries {
+		sdk.Abort("Bucket is full")
+	}
+
+	nc := getBucketField(p.BucketId, "nc")
+	// Re-validated at restock time, not just at list time: a collection denied
+	// after the bucket was opened must not keep accepting stock.
+	assertCollectionAllowed(nc)
+
+	sellerIsOwner := nftGetOwner(nc) == caller
+	contractAddr := getContractAddress()
+	operatorApproved := nftIsApprovedForAll(nc, caller, contractAddr)
+	assertEntriesStockable(p.BucketId, true, nc, caller, contractAddr, sellerIsOwner, operatorApproved, p.Entries)
+
+	units := appendBucketEntries(p.BucketId, p.Entries)
+
+	emitBucketRestocked(p.BucketId, caller, uint64(len(p.Entries)), total, units)
+	return jsonResponse(&SuccessResponse{Success: true})
 }
 
 //go:wasmexport buyFromBucket
@@ -527,10 +627,17 @@ func BuyFromBucket(payload *string) *string {
 	if draws > MaxDrawsPerTx {
 		sdk.Abort("Too many draws in one transaction")
 	}
-	// Every draw scans the entry table, so cost scales with both. Refuse an
-	// oversized purchase here, with a message the buyer can act on, rather than
-	// letting it run out of RC mid-execution.
-	if safeMul(draws, safeAdd(getBucketUint64(p.BucketId, "n"), 4)) > MaxDrawWork {
+	// Cost still scales with the entry count, but through the chunk walk plus
+	// one in-chunk scan rather than a pass over everything — so a big bucket is
+	// affordable where it used to be impossible. Refuse an oversized purchase
+	// here, with a message the buyer can act on, rather than letting it run out
+	// of RC mid-execution.
+	entryCount := getBucketUint64(p.BucketId, "n")
+	inChunk := entryCount
+	if inChunk > BucketChunk {
+		inChunk = BucketChunk
+	}
+	if safeMul(draws, safeAdd(safeAdd(entryCount/BucketChunk, inChunk), 8)) > MaxDrawWork {
 		sdk.Abort("Purchase too large for this bucket — buy fewer packs at once")
 	}
 	// Short-fill would make a fixed pack price meaningless, so require the
@@ -565,9 +672,10 @@ func BuyFromBucket(payload *string) *string {
 		}
 	}
 
-	// Load the entry table ONCE for the whole purchase. Everything below reads
-	// and decrements this copy; state is written back before any external call.
-	table := loadBucketTable(p.BucketId)
+	// One working set for the whole purchase: pool counters and chunk sums are
+	// read once and decremented in memory, then written back before any
+	// external call.
+	table := newBucketDraw(p.BucketId)
 
 	// Every pool must hold enough for its share of this purchase BEFORE any
 	// money moves. Checking only the grand total would let a pack promising a
@@ -599,8 +707,8 @@ func BuyFromBucket(payload *string) *string {
 	// CEI: flush the decremented table and the sold-out flag BEFORE any external
 	// call, so a re-entry through a malicious payment token or NFT contract
 	// cannot see units it has already been promised.
-	table.flush(p.BucketId)
-	if table.unitsLeft() == 0 {
+	table.flush()
+	if table.total == 0 {
 		setBucketField(p.BucketId, "act", "0")
 	}
 

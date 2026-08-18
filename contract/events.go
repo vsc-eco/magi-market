@@ -551,6 +551,20 @@ func emitBucketListed(bucketId uint64, seller, nftContract string, entries, unit
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
+func emitBucketRestocked(bucketId uint64, seller string, added, totalEntries, unitsAdded uint64) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BucketRestockedEvent{
+		Type: "bucket_restocked",
+		Attributes: BucketRestockedAttributes{
+			BucketId: bucketId, Seller: seller, Added: added, TotalEntries: totalEntries, UnitsAdded: unitsAdded,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
 func emitBucketDraw(bucketId uint64, buyer, tokenId string, drawIndex uint64) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BucketDrawEvent{

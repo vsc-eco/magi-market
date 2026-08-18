@@ -12,6 +12,7 @@ import (
 	"vsc-node/lib/test_utils"
 	contract_session "vsc-node/modules/contract/session"
 	"vsc-node/modules/db/vsc/contracts"
+	ledgerDb "vsc-node/modules/db/vsc/ledger"
 	stateEngine "vsc-node/modules/state-processing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,6 +22,7 @@ var _ = embed.FS{}
 
 const MarketContractID = "market"
 const TokenID = "paytoken"
+
 // AssetTokenID is a 2nd magi_token instance used as the SELLABLE asset in
 // token-for-token sale tests (distinct from the payment token).
 const AssetTokenID = "assettoken"
@@ -94,6 +96,13 @@ var CallerMockWasm []byte
 const defaultTimestamp = "2025-09-03T00:00:00"
 
 const gas = uint(500_000_000)
+
+// bigGas is for fixture-building and large-bucket calls. maxGas in this harness
+// is an assert.LessOrEqual AFTER the call, not an execution limit — RcLimit is
+// the only budget that actually rejects anything — so a fixture that mints 500
+// NFTs trips the default assertion without saying anything about whether the
+// contract is affordable on chain.
+const bigGas = uint(4_000_000_000)
 
 // SetupContractTest creates a fresh test instance with marketplace + token + NFT contracts.
 func SetupContractTest() *test_utils.ContractTest {
@@ -184,7 +193,7 @@ func callContract(
 	cr := ct.Call(stateEngine.TxVscCallContract{
 		Caller: authUser,
 		Self: stateEngine.TxSelf{
-			TxId:                 fmt.Sprintf("%s-%s-tx", contractId, action),
+			TxId: fmt.Sprintf("%s-%s-tx", contractId, action),
 			// A realistic Hive block id: 40 hex chars whose first 8 are the
 			// block number. Contracts that derive randomness from block.id
 			// (buckets) validate its shape, and a short mock id would both fail
@@ -295,6 +304,58 @@ func InitFullSetup(t *testing.T, ct *test_utils.ContractTest) {
 func MintNft(t *testing.T, ct *test_utils.ContractTest, to, tokenId string, amount, maxSupply uint64) {
 	payload := fmt.Sprintf(`{"to":"%s","id":"%s","amount":%d,"maxSupply":%d}`, to, tokenId, amount, maxSupply)
 	CallNft(t, ct, "mint", []byte(payload), nil, ownerAddress, true, gas, "")
+}
+
+// FundRc raises an account's RC budget for the rest of the test.
+//
+// RC is not per call. The harness accumulates consumption per ACCOUNT across
+// the whole test (ct.RcSession), and an account's budget is its HBD ledger
+// balance plus the 10k free tier — so a test that mints, approves and lists
+// from one account silently spends the same 10k on setup that it wants to
+// measure with. That is what made earlier bucket measurements unreadable: a
+// listing "too expensive at ten entries" was really a seller who had already
+// spent their allowance on ten mints.
+//
+// Depositing HBD raises the budget, which lets a test build a large fixture and
+// still measure the call it cares about against a realistic per-call rcLimit.
+func FundRc(ct *test_utils.ContractTest, account string, amount int64) {
+	ct.Deposit(account, amount, ledgerDb.AssetHbd)
+}
+
+// MintNftBatch mints many token ids, splitting them across as many calls as the
+// per-call rcLimit allows.
+//
+// Minting one id per call is what made big fixtures unaffordable. The NFT
+// contract accepts 256 ids per batch, but that is a batch-size cap, not a cost
+// cap: 250 ids in one call needs well over the 10000 RC a real transaction
+// gets. So batch generously, but stay inside one transaction's budget.
+const mintBatchChunk = 20
+
+func MintNftBatch(t *testing.T, ct *test_utils.ContractTest, to string, tokenIds []string, amount, maxSupply uint64) {
+	for off := 0; off < len(tokenIds); off += mintBatchChunk {
+		end := off + mintBatchChunk
+		if end > len(tokenIds) {
+			end = len(tokenIds)
+		}
+		ids := "["
+		amts := "["
+		sup := "["
+		for i, id := range tokenIds[off:end] {
+			if i > 0 {
+				ids += ","
+				amts += ","
+				sup += ","
+			}
+			ids += `"` + id + `"`
+			amts += fmt.Sprintf("%d", amount)
+			sup += fmt.Sprintf("%d", maxSupply)
+		}
+		ids += "]"
+		amts += "]"
+		sup += "]"
+		payload := fmt.Sprintf(`{"to":"%s","ids":%s,"amounts":%s,"maxSupplies":%s}`, to, ids, amts, sup)
+		CallNft(t, ct, "mintBatch", []byte(payload), nil, ownerAddress, true, bigGas, "")
+	}
 }
 
 // MintAndApproveToken mints payment tokens to a user and approves the marketplace to spend them.

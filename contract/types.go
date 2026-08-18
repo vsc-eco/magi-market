@@ -14,18 +14,18 @@ type InitPayload struct {
 }
 
 type ListPayload struct {
-	NftContract      string `json:"nftContract"`
-	TokenId          string `json:"tokenId"`
-	Amount           uint64 `json:"amount"`
-	PaymentToken     string `json:"paymentToken"`
-	PricePerUnit     string `json:"pricePerUnit"`
-	ExpirationBlock  uint64 `json:"expirationBlock"`
-	StartBlock       uint64 `json:"startBlock"`
-	PayoutMode       string `json:"payoutMode"`       // "" | "default" | "unmap" (F1 opt-in)
-	PayoutL1Address  string `json:"payoutL1Address"`  // required when PayoutMode=="unmap"
-	DexPool          string `json:"dexPool"`          // F2: DEX pool contract id; "" = disabled
-	SettleToken      string `json:"settleToken"`      // F2: asset_out id; "" = disabled
-	MinSettleOut     string `json:"minSettleOut"`     // F2: slippage floor (decimal string)
+	NftContract     string `json:"nftContract"`
+	TokenId         string `json:"tokenId"`
+	Amount          uint64 `json:"amount"`
+	PaymentToken    string `json:"paymentToken"`
+	PricePerUnit    string `json:"pricePerUnit"`
+	ExpirationBlock uint64 `json:"expirationBlock"`
+	StartBlock      uint64 `json:"startBlock"`
+	PayoutMode      string `json:"payoutMode"`      // "" | "default" | "unmap" (F1 opt-in)
+	PayoutL1Address string `json:"payoutL1Address"` // required when PayoutMode=="unmap"
+	DexPool         string `json:"dexPool"`         // F2: DEX pool contract id; "" = disabled
+	SettleToken     string `json:"settleToken"`     // F2: asset_out id; "" = disabled
+	MinSettleOut    string `json:"minSettleOut"`    // F2: slippage floor (decimal string)
 }
 
 type DelistPayload struct {
@@ -619,9 +619,9 @@ type RoyaltySplitsResponse struct {
 }
 
 type RoyaltySplitsSetEvent struct {
-	Type       string                      `json:"type"`
-	Attributes RoyaltySplitsSetAttributes  `json:"attributes"`
-	Tx         string                      `json:"tx"`
+	Type       string                     `json:"type"`
+	Attributes RoyaltySplitsSetAttributes `json:"attributes"`
+	Tx         string                     `json:"tx"`
 }
 
 type RoyaltySplitsSetAttributes struct {
@@ -640,9 +640,9 @@ type SweepPayload struct {
 }
 
 type SweptEvent struct {
-	Type       string           `json:"type"`
-	Attributes SweptAttributes  `json:"attributes"`
-	Tx         string           `json:"tx"`
+	Type       string          `json:"type"`
+	Attributes SweptAttributes `json:"attributes"`
+	Tx         string          `json:"tx"`
 }
 
 type SweptAttributes struct {
@@ -665,9 +665,9 @@ type EffectiveFeeResponse struct {
 }
 
 type CollectionFeeSetEvent struct {
-	Type       string                       `json:"type"`
-	Attributes CollectionFeeSetAttributes   `json:"attributes"`
-	Tx         string                       `json:"tx"`
+	Type       string                     `json:"type"`
+	Attributes CollectionFeeSetAttributes `json:"attributes"`
+	Tx         string                     `json:"tx"`
 }
 
 type CollectionFeeSetAttributes struct {
@@ -676,9 +676,9 @@ type CollectionFeeSetAttributes struct {
 }
 
 type CollectionFeeClearedEvent struct {
-	Type       string                          `json:"type"`
-	Attributes CollectionFeeClearedAttributes  `json:"attributes"`
-	Tx         string                          `json:"tx"`
+	Type       string                         `json:"type"`
+	Attributes CollectionFeeClearedAttributes `json:"attributes"`
+	Tx         string                         `json:"tx"`
 }
 
 type CollectionFeeClearedAttributes struct {
@@ -698,46 +698,67 @@ type BundleItem struct {
 // Buckets (random-draw sales)
 // ===================================
 
-// MaxBucketEntries caps how many distinct token ids one bucket holds. The draw
-// scans entries linearly, so this bounds per-draw work; MaxDrawWork below turns
-// that into a per-purchase bound.
+// MaxBucketEntries caps how many distinct token ids one bucket holds.
 //
-// UNRESOLVED: listBucket costs ~152 RC per entry and scales cleanly to eight
-// (4 -> 1755 RC, 6 -> 2060, 8 -> 2364), but a ten-entry listing aborted with
-// "cost limit exceeded". That measurement is confounded — in the harness the
-// seller is also the account that runs InitFullSetup and every mint, and
-// accounts have a cumulative RC pool, so ten mints plus a listing may simply
-// exhaust the seller rather than the listing being too expensive. Measure again
-// with mintBatch (one call for many ids) before drawing any conclusion, and
-// only then decide whether this constant needs lowering.
-const MaxBucketEntries = 20
+// This used to be 20, because the draw re-read and re-scanned EVERY entry on
+// every draw: cost was O(entries), so a large bucket could not be drawn from
+// inside the default rcLimit at all. Entries now live in per-pool slot arrays
+// with chunked unit sums (see internal.go), so a draw touches
+// `entries/BucketChunk + BucketChunk` slots instead of all of them, and the
+// cap can be set by what the STATE should sensibly hold rather than by what a
+// single draw can afford to scan.
+const MaxBucketEntries = 512
+
+// MaxEntriesPerCall caps how many entries ONE listBucket or addToBucket call
+// may add. A full bucket cannot be stocked in a single transaction at any
+// per-entry cost, which is exactly why addToBucket exists — stock a big bucket
+// across several calls.
+//
+// Measured: listing costs ~1570 RC fixed plus ~265 RC per entry (1 entry =
+// 1572, 5 entries = 2634), against a default 10000 rcLimit. 24 entries lands
+// near 7900 and leaves room for the sellers who cost more per entry — anyone
+// authorising with per-token allowances instead of operator approval, or
+// stocking a collection they do not own, pays an extra state read each.
+//
+// A cap the RC budget cannot honour would just move the failure from a clear
+// message to an opaque "cost limit exceeded", which is the same mistake
+// MaxDrawWork exists to avoid.
+const MaxEntriesPerCall = 24
+
+// BucketChunk is how many slots share one cached unit sum. The draw walks chunk
+// sums to find the right chunk, then scans inside it, so per-draw work is
+// `entries/BucketChunk + BucketChunk` — minimised near sqrt(entries). 32 is the
+// sweet spot for a 512-entry bucket (16 + 32) and costs nothing at small sizes,
+// where the whole bucket is one chunk.
+const BucketChunk = 32
 
 // MaxDrawsPerTx is an absolute ceiling on the draws one transaction performs.
 // It is a backstop; MaxDrawWork below is the constraint that actually binds.
 const MaxDrawsPerTx = 24
 
-// MaxDrawWork bounds the WORK a purchase may ask for, because RC scales with
-// draws AND with the size of the entry table each draw scans. Measured after
-// the per-draw work was hoisted out (RC, on the default 10000 rcLimit the SDK
-// sends):
+// MaxDrawWork bounds the WORK a purchase may ask for. RC still scales with the
+// entry count, just far more slowly than it did, so the bound is kept with a
+// formula that tracks the new shape:
 //
-//	fixed              ~1840 RC   payment pull, fee/royalty/seller transfers
-//	per draw            ~107 RC
-//	per draw x entry     ~24 RC   the weighted scan
+//	work = draws * (entries/BucketChunk + min(entries, BucketChunk) + 8)
 //
-//	10 draws x  4 entries = 3859 RC   (measured)
-//	20 draws x  2 entries = 4927 RC   (measured)
-//	24 draws x 20 entries = ~15800    (measured: "cost limit exceeded")
+// Measured on the chunked layout (RC, on the default 10000 rcLimit):
 //
-// So a flat draw cap is dishonest — 24 draws is fine on a two-entry bucket and
-// impossible on a twenty-entry one. `draws * (entries + 4)` tracks the cost
-// closely enough (107/24 ~= 4.5), and 300 leaves headroom against the 8160 RC
-// a default-limit purchase has left after the fixed cost.
+//	fixed                            ~1840 RC   payment pull, fee/royalty/seller
+//	per work unit                      ~13 RC
 //
-// The point is to refuse an oversized purchase with a clear message BEFORE
-// taking payment, rather than letting it die deep in execution with an opaque
-// "cost limit exceeded".
-const MaxDrawWork = 300
+//	 1 draw  x 500 entries =  55 work =  2738 RC   (measured)
+//	10 draws x 500 entries = 550 work =  9113 RC   (measured)
+//	10 draws x   5 entries = 130 work =  3687 RC   (measured)
+//
+// (10000 - 1840) / 13 ~= 620, so 600 is the honest ceiling: it admits the
+// 10-card pack over a full 500-entry bucket that has just been measured, and
+// refuses the 11-card one that would not fit.
+//
+// The point is unchanged: refuse an oversized purchase with a clear message
+// BEFORE taking payment, rather than letting it die deep in execution with an
+// opaque "cost limit exceeded".
+const MaxDrawWork = 600
 
 // MaxBucketPools caps how many pools a pack may draw from. Each pool costs a
 // pass over the entries per draw, so this bounds the work a single purchase can
@@ -792,6 +813,30 @@ type BuyFromBucketPayload struct {
 
 type BucketIdPayload struct {
 	BucketId uint64 `json:"bucketId"`
+}
+
+// AddToBucketPayload stocks MORE entries into a bucket that already exists.
+//
+// A 500-card bucket cannot be listed in one transaction — the per-entry write
+// cost alone exceeds the rcLimit long before that — so stocking is chunked:
+// listBucket opens the bucket with a first batch, addToBucket appends the rest.
+type AddToBucketPayload struct {
+	BucketId uint64        `json:"bucketId"`
+	Entries  []BucketEntry `json:"entries"`
+}
+
+type BucketRestockedEvent struct {
+	Type       string                    `json:"type"`
+	Attributes BucketRestockedAttributes `json:"attributes"`
+	Tx         string                    `json:"tx"`
+}
+
+type BucketRestockedAttributes struct {
+	BucketId     uint64 `json:"bucketId"`
+	Seller       string `json:"seller"`
+	Added        uint64 `json:"added"`
+	TotalEntries uint64 `json:"totalEntries"`
+	UnitsAdded   uint64 `json:"unitsAdded"`
 }
 
 type BucketListedEvent struct {
@@ -890,9 +935,9 @@ type BundleResponse struct {
 }
 
 type BundleListedEvent struct {
-	Type       string                  `json:"type"`
-	Attributes BundleListedAttributes  `json:"attributes"`
-	Tx         string                  `json:"tx"`
+	Type       string                 `json:"type"`
+	Attributes BundleListedAttributes `json:"attributes"`
+	Tx         string                 `json:"tx"`
 }
 
 type BundleListedAttributes struct {
@@ -904,9 +949,9 @@ type BundleListedAttributes struct {
 }
 
 type BundleBoughtEvent struct {
-	Type       string                  `json:"type"`
-	Attributes BundleBoughtAttributes  `json:"attributes"`
-	Tx         string                  `json:"tx"`
+	Type       string                 `json:"type"`
+	Attributes BundleBoughtAttributes `json:"attributes"`
+	Tx         string                 `json:"tx"`
 }
 
 type BundleBoughtAttributes struct {
@@ -918,9 +963,9 @@ type BundleBoughtAttributes struct {
 }
 
 type BundleDelistedEvent struct {
-	Type       string                    `json:"type"`
-	Attributes BundleDelistedAttributes  `json:"attributes"`
-	Tx         string                    `json:"tx"`
+	Type       string                   `json:"type"`
+	Attributes BundleDelistedAttributes `json:"attributes"`
+	Tx         string                   `json:"tx"`
 }
 
 type BundleDelistedAttributes struct {
@@ -964,9 +1009,9 @@ type SwapResponse struct {
 }
 
 type SwapProposedEvent struct {
-	Type       string                `json:"type"`
+	Type       string                 `json:"type"`
 	Attributes SwapProposedAttributes `json:"attributes"`
-	Tx         string                `json:"tx"`
+	Tx         string                 `json:"tx"`
 }
 
 type SwapProposedAttributes struct {
@@ -1004,13 +1049,13 @@ type SwapCancelledAttributes struct {
 // ===================================
 
 type ListRentalPayload struct {
-	NftContract    string `json:"nftContract"`
-	TokenId        string `json:"tokenId"`
-	Amount         uint64 `json:"amount"`
-	PaymentToken   string `json:"paymentToken"`
-	PricePerBlock  string `json:"pricePerBlock"`
-	MinBlocks      uint64 `json:"minBlocks"`
-	MaxBlocks      uint64 `json:"maxBlocks"`
+	NftContract   string `json:"nftContract"`
+	TokenId       string `json:"tokenId"`
+	Amount        uint64 `json:"amount"`
+	PaymentToken  string `json:"paymentToken"`
+	PricePerBlock string `json:"pricePerBlock"`
+	MinBlocks     uint64 `json:"minBlocks"`
+	MaxBlocks     uint64 `json:"maxBlocks"`
 }
 
 type RentPayload struct {
@@ -1050,9 +1095,9 @@ type ActiveRentalResponse struct {
 }
 
 type RentalListedEvent struct {
-	Type       string                   `json:"type"`
-	Attributes RentalListedAttributes   `json:"attributes"`
-	Tx         string                   `json:"tx"`
+	Type       string                 `json:"type"`
+	Attributes RentalListedAttributes `json:"attributes"`
+	Tx         string                 `json:"tx"`
 }
 
 type RentalListedAttributes struct {
@@ -1135,9 +1180,9 @@ type MintSpotListingResponse struct {
 }
 
 type MintSpotsListedEvent struct {
-	Type       string                      `json:"type"`
-	Attributes MintSpotsListedAttributes   `json:"attributes"`
-	Tx         string                      `json:"tx"`
+	Type       string                    `json:"type"`
+	Attributes MintSpotsListedAttributes `json:"attributes"`
+	Tx         string                    `json:"tx"`
 }
 
 type MintSpotsListedAttributes struct {
@@ -1163,9 +1208,9 @@ type MintSpotBoughtAttributes struct {
 }
 
 type MintSpotsDelistedEvent struct {
-	Type       string                        `json:"type"`
-	Attributes MintSpotsDelistedAttributes   `json:"attributes"`
-	Tx         string                        `json:"tx"`
+	Type       string                      `json:"type"`
+	Attributes MintSpotsDelistedAttributes `json:"attributes"`
+	Tx         string                      `json:"tx"`
 }
 
 type MintSpotsDelistedAttributes struct {
