@@ -462,3 +462,190 @@ func TestBucketWorstCaseRcHeadroom(t *testing.T) {
 	}
 	assert.Equal(t, uint64(18), total, "18 draws delivered across three packs")
 }
+
+// ---------------------------------------------------------------------------
+// The promises above are the fun ones. These cover the load-bearing behaviour
+// underneath: money correctness, the no-escrow consequences, and the guards
+// that only matter when something has already gone wrong.
+// ---------------------------------------------------------------------------
+
+// TestBucketRoyaltySplitsArePaid: every earlier test ran with no royalty
+// configured, so the split payout path was never exercised for buckets at all.
+func TestBucketRoyaltySplitsArePaid(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:royaltybuyer"
+
+	// 500 bps of royalty, split 300/200 between two recipients.
+	splits := fmt.Sprintf(`{"nftContract":"%s","splits":[{"recipient":"hive:artist","bps":300},{"recipient":"hive:studio","bps":200}]}`, NftContractID)
+	CallMarket(t, ct, "setRoyaltySplits", []byte(splits), nil, ownerAddress, "", true, gas, "")
+
+	MintNft(t, ct, seller, "roy", 4, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	artistBefore := QueryTokenBalance(t, ct, "hive:artist")
+	studioBefore := QueryTokenBalance(t, ct, "hive:studio")
+	feeBefore := QueryTokenBalance(t, ct, feeRecipientAddress)
+	sellerBefore := QueryTokenBalance(t, ct, seller)
+
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"roy", "4"}}), "10000", "0", "[]")
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
+
+	// 10000 sale: 250 fee (250 bps), 300 + 200 royalty, seller keeps the rest.
+	assert.Equal(t, feeBefore+250, QueryTokenBalance(t, ct, feeRecipientAddress), "fee recipient")
+	assert.Equal(t, artistBefore+300, QueryTokenBalance(t, ct, "hive:artist"), "artist split")
+	assert.Equal(t, studioBefore+200, QueryTokenBalance(t, ct, "hive:studio"), "studio split")
+	assert.Equal(t, sellerBefore+9250, QueryTokenBalance(t, ct, seller), "seller nets the remainder")
+}
+
+// TestBucketFeeAndRoyaltyAreSnapshotAtListTime: raising the fee or royalty after
+// a bucket is listed must not change what an in-flight bucket charges. This is
+// the guarantee the snapshot exists for, and nothing tested it.
+func TestBucketFeeAndRoyaltyAreSnapshotAtListTime(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:snapbuyer"
+
+	MintNft(t, ct, seller, "snap", 4, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	// Listed under the default 250 bps fee and no royalty.
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"snap", "4"}}), "10000", "0", "[]")
+
+	// Now move both sharply, AFTER listing.
+	CallMarket(t, ct, "setFee", []byte(`{"feeBps":1000}`), nil, ownerAddress, "", true, gas, "")
+	splits := fmt.Sprintf(`{"nftContract":"%s","splits":[{"recipient":"hive:artist","bps":2000}]}`, NftContractID)
+	CallMarket(t, ct, "setRoyaltySplits", []byte(splits), nil, ownerAddress, "", true, gas, "")
+
+	feeBefore := QueryTokenBalance(t, ct, feeRecipientAddress)
+	artistBefore := QueryTokenBalance(t, ct, "hive:artist")
+	sellerBefore := QueryTokenBalance(t, ct, seller)
+
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
+
+	// The OLD terms apply: 250 fee, no royalty, seller keeps 9750.
+	assert.Equal(t, feeBefore+250, QueryTokenBalance(t, ct, feeRecipientAddress), "fee stays at the listed 250 bps")
+	assert.Equal(t, artistBefore, QueryTokenBalance(t, ct, "hive:artist"), "a royalty added after listing must not apply")
+	assert.Equal(t, sellerBefore+9750, QueryTokenBalance(t, ct, seller), "seller nets the listed terms")
+}
+
+// TestBucketMaxTotalPriceGuard: the slippage guard every other buy path carries.
+func TestBucketMaxTotalPriceGuard(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:slipbuyer"
+
+	MintNft(t, ct, seller, "slip", 6, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"slip", "6"}}), "1000", "0", "[]")
+
+	// Two draws cost 2000; a 1500 ceiling must refuse.
+	tooTight := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":2,"maxTotalPrice":"1500"}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(tooTight), nil, buyer, "", false, gas, "Total price exceeds maxTotalPrice")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, buyer, "slip"), "a refused buy delivers nothing")
+
+	// The exact total is fine.
+	ok := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":2,"maxTotalPrice":"2000"}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(ok), nil, buyer, "", true, gas, "")
+	assert.Equal(t, uint64(2), QueryNftBalance(t, ct, buyer, "slip"), "two singles in one call")
+}
+
+// TestBucketExpires: an expired bucket sells nothing, even with units left.
+func TestBucketExpires(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:latebuyer"
+
+	MintNft(t, ct, seller, "exp", 4, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	ct.BlockHeight = 100
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":150}`,
+		NftContractID, bucketEntriesJSON([][2]string{{"exp", "4"}}), TokenID)
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
+	id := ParseCreated(res).Id
+
+	// Before expiry: fine.
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
+
+	// Past it: refused, though three units remain.
+	ct.BlockHeight = 200
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas, "Bucket has expired")
+	assert.Equal(t, uint64(3), QueryNftBalance(t, ct, seller, "exp"), "unsold units stay with the seller")
+}
+
+// TestBucketPrunesStaleEntryAndStillDelivers is the test the no-escrow design
+// most needs. The market never takes custody, so a seller can move units out
+// from under a listed bucket. A draw that lands on such an entry must drop it,
+// say so, and redraw — one stale entry must not fail the whole purchase.
+func TestBucketPrunesStaleEntryAndStillDelivers(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:prunebuyer"
+
+	MintNft(t, ct, seller, "gone", 5, 100)
+	MintNft(t, ct, seller, "stays", 5, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"gone", "5"}, {"stays", "5"}}), "1000", "0", "[]")
+
+	// The seller moves every unit of "gone" elsewhere AFTER listing.
+	away := fmt.Sprintf(`{"from":"%s","to":"hive:elsewhere","id":"gone","amount":5,"data":""}`, seller)
+	CallNft(t, ct, "safeTransferFrom", []byte(away), nil, seller, true, gas, "")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "gone"), "seller no longer holds it")
+
+	// The purchase still succeeds, delivering from the entry that is left.
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	_, _, logs := CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
+
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, buyer, "stays"), "delivered from the live entry")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, buyer, "gone"), "never delivers what the seller moved away")
+
+	// The units did not vanish silently — the drop is on the record.
+	AssertEventEmitted(t, logs, "bucket_entry_dropped")
+}
+
+// TestBucketNonOwnerCannotStockSoulbound: soulbound tokens can only be moved by
+// the collection owner, so anyone else stocking one would be selling a prize
+// that can never be delivered.
+func TestBucketNonOwnerCannotStockSoulbound(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	holder := "hive:sbholder"
+
+	// Mint a soulbound token, then hand it to someone who is NOT the collection
+	// owner — allowed, because the transfer is FROM the owner.
+	CallNft(t, ct, "mint", []byte(`{"to":"hive:tibfox","id":"sb1","amount":2,"maxSupply":2,"soulbound":true}`),
+		nil, ownerAddress, true, gas, "")
+	away := fmt.Sprintf(`{"from":"%s","to":"%s","id":"sb1","amount":2,"data":""}`, ownerAddress, holder)
+	CallNft(t, ct, "safeTransferFrom", []byte(away), nil, ownerAddress, true, gas, "")
+
+	approve := `{"operator":"contract:market","approved":true}`
+	CallNft(t, ct, "setApprovalForAll", []byte(approve), nil, holder, true, gas, "")
+
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
+		NftContractID, bucketEntriesJSON([][2]string{{"sb1", "2"}}), TokenID)
+	CallMarket(t, ct, "listBucket", []byte(payload), nil, holder, "", false, gas, "Cannot stock soulbound tokens")
+}
