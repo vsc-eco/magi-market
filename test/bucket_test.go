@@ -649,3 +649,47 @@ func TestBucketNonOwnerCannotStockSoulbound(t *testing.T) {
 		NftContractID, bucketEntriesJSON([][2]string{{"sb1", "2"}}), TokenID)
 	CallMarket(t, ct, "listBucket", []byte(payload), nil, holder, "", false, gas, "Cannot stock soulbound tokens")
 }
+
+// TestBucketRefusesContractCaller proves the guard that makes a random draw
+// fair: buyFromBucket must refuse to run when a CONTRACT is calling it.
+//
+// Without this, the draw is not random in any meaningful sense. A buyer deploys
+// a contract that calls buyFromBucket, inspects the token it drew and aborts on
+// a bad result — the abort reverts the whole transaction, so the losing draw
+// costs them only RC. They retry until the rare comes out, turning odds into a
+// choice. The market sees msg.caller = their contract while msg.sender stays
+// the human who signed, so caller == sender rejects exactly that shape.
+func TestBucketRefusesContractCaller(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	attacker := "hive:attacker"
+
+	MintNft(t, ct, seller, "prize", 5, 100)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, attacker, 100000)
+	// The mock is deliberately NOT funded: a contract account cannot sign an
+	// approve, and it does not need to. The guard fires before any payment is
+	// pulled, which is the point — the refusal is about who is calling, not
+	// about whether they could pay.
+
+	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"prize", "5"}}), "1000", "0", "[]")
+
+	// Straight from a user account: allowed.
+	direct := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(direct), nil, attacker, "", true, gas, "")
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, attacker, "prize"), "a direct buy works")
+
+	// Through a contract: refused.
+	through := fmt.Sprintf(`{"market":"%s","bucketId":%d}`, MarketContractID, id)
+	callContract(t, ct, CallerMockID, "buyThrough", []byte(through), nil, attacker,
+		defaultTimestamp, false, gas, "")
+
+	// Nothing moved on the refused attempt — not to the mock, not to the human.
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, "contract:"+CallerMockID, "prize"),
+		"the contract must not receive a draw")
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, attacker, "prize"),
+		"and the refused call must not deliver to the signer either")
+	assert.Equal(t, uint64(4), QueryNftBalance(t, ct, seller, "prize"), "only the direct buy drew a unit")
+}

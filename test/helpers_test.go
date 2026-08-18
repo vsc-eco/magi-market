@@ -54,6 +54,11 @@ const DexMockID = "contract:dexmock"
 // requiring the real nft contract to implement the feature first.
 const MintNftMockID = "mintnftmock"
 
+// CallerMockID is a contract that calls the market on a user's behalf. It
+// exists to prove buyFromBucket refuses contract callers, which is what closes
+// the retry-on-loss attack on random draws.
+const CallerMockID = "callermock"
+
 const ownerAddress = "hive:tibfox"
 const feeRecipientAddress = "hive:feerecipient"
 
@@ -83,6 +88,9 @@ var DexMockWasm []byte
 //go:embed artifacts/mintnftmock.wasm
 var MintNftMockWasm []byte
 
+//go:embed artifacts/callermock.wasm
+var CallerMockWasm []byte
+
 const defaultTimestamp = "2025-09-03T00:00:00"
 
 const gas = uint(500_000_000)
@@ -99,6 +107,7 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct.RegisterContract(UtxoMockID, ownerAddress, UtxoMockWasm)
 	ct.RegisterContract(DexMockID, ownerAddress, DexMockWasm)
 	ct.RegisterContract(MintNftMockID, ownerAddress, MintNftMockWasm)
+	ct.RegisterContract(CallerMockID, ownerAddress, CallerMockWasm)
 	return &ct
 }
 

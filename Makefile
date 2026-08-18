@@ -53,7 +53,7 @@ TOKEN_REPO ?= $(realpath $(ROOT)/../testnet/magi_token-contract)
 VSC_NODE_URL ?= https://github.com/vsc-eco/go-vsc-node.git
 
 ART    := $(ROOT)/test/artifacts
-MOCKS  := dexmock utxomock feetoken mintnftmock
+MOCKS  := dexmock utxomock feetoken mintnftmock callermock
 MOCK_WASM := $(addprefix $(ART)/,$(addsuffix .wasm,$(MOCKS)))
 
 .PHONY: all setup build artifacts ext test test-run clean clean-artifacts distclean preflight tools help
