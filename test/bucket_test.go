@@ -345,15 +345,42 @@ func TestBucketRefusesPackWithEmptySlotPool(t *testing.T) {
 	InitFullSetup(t, ct)
 
 	seller := ownerAddress
+	buyer := "hive:emptyslotbuyer"
 	MintNft(t, ct, seller, "onlycommon", 10, 100)
 	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
 
 	// packDraws asks for a draw from pool 1, but nothing is stocked there.
+	//
+	// Listing SUCCEEDS: stocking is split across calls now, so a bucket whose
+	// rare pool arrives in a later addToBucket is normal, not an error — that is
+	// exactly the shape a Pokemon-style pack has. The guarantee is enforced
+	// where it can be enforced against live state instead.
 	entries := bucketPoolEntriesJSON([][3]string{{"onlycommon", "10", "0"}})
 	payload := fmt.Sprintf(
 		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"10000","packDraws":[4,1],"expirationBlock":0}`,
 		NftContractID, entries, TokenID)
-	CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", false, gas, "")
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
+	id := ParseCreated(res).Id
+
+	// Buying is refused, and refused BEFORE any money moves — a pack that cannot
+	// fill its rare slot must never be paid for.
+	before := QueryTokenBalance(t, ct, buyer)
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas,
+		"Not enough units left in a required pool")
+	assert.Equal(t, before, QueryTokenBalance(t, ct, buyer), "buyer must not be charged")
+
+	// Once the rare pool is stocked, the same purchase goes through and the
+	// guaranteed slot is honoured.
+	MintNft(t, ct, seller, "therare", 1, 1)
+	add := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id,
+		bucketPoolEntriesJSON([][3]string{{"therare", "1", "1"}}))
+	CallMarket(t, ct, "addToBucket", []byte(add), nil, seller, "", true, gas, "")
+	_, _, logs := CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
+	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, buyer, "therare"),
+		"the guaranteed slot must be filled from the rare pool")
+	assert.Len(t, drawnTokenIds(logs), 5, "a [4,1] pack delivers five cards")
 }
 
 // TestBucketPackStopsWhenRarePoolEmpties: once the guaranteed slot's pool runs

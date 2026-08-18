@@ -435,29 +435,19 @@ func ListBucket(payload *string) *string {
 	operatorApproved := nftIsApprovedForAll(p.NftContract, caller, contractAddr)
 	assertEntriesStockable(0, false, p.NftContract, caller, contractAddr, sellerIsOwner, operatorApproved, p.Entries)
 
-	// Every slot a pack promises must actually be stocked, or the bucket would
-	// sell a guarantee it cannot keep. Same for pool 0 when single draws are on.
-	for pool := uint64(0); pool < MaxBucketPools; pool++ {
-		need := false
-		if packOn && pool < uint64(len(p.PackDraws)) && p.PackDraws[pool] > 0 {
-			need = true
-		}
-		if singleOn && pool == 0 {
-			need = true
-		}
-		if !need {
-			continue
-		}
-		stocked := uint64(0)
-		for _, e := range p.Entries {
-			if e.Pool == pool {
-				stocked = safeAdd(stocked, e.Amount)
-			}
-		}
-		if stocked == 0 {
-			sdk.Abort("A pack slot has no entries in its pool")
-		}
-	}
+	// The pack-guarantee check deliberately does NOT live here.
+	//
+	// It used to: listing refused a bucket whose promised pools were not all
+	// stocked. That was right when a bucket arrived whole, and became wrong the
+	// moment stocking was split across calls — a 500-card bucket whose rares are
+	// added in a later batch would be refused on sight, which is precisely the
+	// shape a Pokemon-style pack has.
+	//
+	// buyFromBucket re-checks every promised pool against LIVE state before any
+	// money moves, which is the check that actually protects the buyer: stock can
+	// drain after listing, so a list-time check was never sufficient anyway. A
+	// bucket missing its rare pool is simply not buyable until the seller stocks
+	// it.
 
 	feeBps := getEffectiveFeeBps(p.NftContract)
 	royaltyBps := getRoyaltyBps(p.NftContract)
