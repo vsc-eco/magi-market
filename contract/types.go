@@ -832,11 +832,12 @@ type BucketRestockedEvent struct {
 }
 
 type BucketRestockedAttributes struct {
-	BucketId     uint64 `json:"bucketId"`
-	Seller       string `json:"seller"`
-	Added        uint64 `json:"added"`
-	TotalEntries uint64 `json:"totalEntries"`
-	UnitsAdded   uint64 `json:"unitsAdded"`
+	BucketId     uint64        `json:"bucketId"`
+	Seller       string        `json:"seller"`
+	Entries      []BucketEntry `json:"entries"`
+	Added        uint64        `json:"added"`
+	TotalEntries uint64        `json:"totalEntries"`
+	UnitsAdded   uint64        `json:"unitsAdded"`
 }
 
 type BucketListedEvent struct {
@@ -845,12 +846,29 @@ type BucketListedEvent struct {
 	Tx         string                 `json:"tx"`
 }
 
+// BucketListedAttributes carries everything an indexer needs to mirror a new
+// bucket without reading contract state: the commercial terms, the fee and
+// royalty snapshot taken at list time, and the entries themselves.
+//
+// The entries are safe to inline because listBucket accepts at most
+// MaxEntriesPerCall of them, so one event can never carry an unbounded array —
+// a large bucket arrives as a listing plus a series of restocks, each bounded
+// the same way.
 type BucketListedAttributes struct {
-	BucketId    uint64 `json:"bucketId"`
-	Seller      string `json:"seller"`
-	NftContract string `json:"nftContract"`
-	Entries     uint64 `json:"entries"`
-	Units       uint64 `json:"units"`
+	BucketId         uint64        `json:"bucketId"`
+	Seller           string        `json:"seller"`
+	NftContract      string        `json:"nftContract"`
+	PaymentToken     string        `json:"paymentToken"`
+	PricePerDraw     string        `json:"pricePerDraw"`
+	PricePerPack     string        `json:"pricePerPack"`
+	PackDraws        []uint64      `json:"packDraws"`
+	ExpirationBlock  uint64        `json:"expirationBlock"`
+	FeeBps           uint64        `json:"feeBps"`
+	RoyaltyBps       uint64        `json:"royaltyBps"`
+	RoyaltyRecipient string        `json:"royaltyRecipient"`
+	Entries          []BucketEntry `json:"entries"`
+	EntryCount       uint64        `json:"entryCount"`
+	Units            uint64        `json:"units"`
 }
 
 // BucketDrawEvent fires once per delivered unit rather than carrying an array,
@@ -866,6 +884,7 @@ type BucketDrawAttributes struct {
 	BucketId  uint64 `json:"bucketId"`
 	Buyer     string `json:"buyer"`
 	TokenId   string `json:"tokenId"`
+	Pool      uint64 `json:"pool"`
 	DrawIndex uint64 `json:"drawIndex"`
 }
 
@@ -876,13 +895,15 @@ type BucketPurchaseEvent struct {
 }
 
 type BucketPurchaseAttributes struct {
-	BucketId uint64 `json:"bucketId"`
-	Buyer    string `json:"buyer"`
-	Mode     string `json:"mode"`
-	Draws    uint64 `json:"draws"`
-	Paid     string `json:"paid"`
-	Fee      string `json:"fee"`
-	Royalty  string `json:"royalty"`
+	BucketId     uint64 `json:"bucketId"`
+	Buyer        string `json:"buyer"`
+	Mode         string `json:"mode"`
+	Draws        uint64 `json:"draws"`
+	PaymentToken string `json:"paymentToken"`
+	Paid         string `json:"paid"`
+	Fee          string `json:"fee"`
+	Royalty      string `json:"royalty"`
+	UnitsLeft    uint64 `json:"unitsLeft"`
 }
 
 // BucketEntryDroppedEvent records an entry pruned mid-draw because the seller
@@ -897,7 +918,24 @@ type BucketEntryDroppedEvent struct {
 type BucketEntryDroppedAttributes struct {
 	BucketId uint64 `json:"bucketId"`
 	TokenId  string `json:"tokenId"`
+	Pool     uint64 `json:"pool"`
+	Units    uint64 `json:"units"`
 	Reason   string `json:"reason"`
+}
+
+// BucketSoldOutEvent fires when the last unit leaves a bucket and it closes
+// itself. Without it the only way to observe a closed bucket is delisting,
+// which is a SELLER action — a bucket that simply sold out would look open
+// forever to anything reading the log.
+type BucketSoldOutEvent struct {
+	Type       string                  `json:"type"`
+	Attributes BucketSoldOutAttributes `json:"attributes"`
+	Tx         string                  `json:"tx"`
+}
+
+type BucketSoldOutAttributes struct {
+	BucketId uint64 `json:"bucketId"`
+	Seller   string `json:"seller"`
 }
 
 type BucketDelistedEvent struct {

@@ -8698,6 +8698,11 @@ func tinyjsonC3EncodeBucketRestockedEvent(out *jwriter.Writer, in BucketRestocke
 			out.String(string(in.Attributes.Seller))
 		}
 		{
+			const p2 string = ",\"entries\":"
+			out.RawString(p2)
+			writeBucketEntries(out, in.Attributes.Entries)
+		}
+		{
 			const p2 string = ",\"added\":"
 			out.RawString(p2)
 			out.Uint64(uint64(in.Attributes.Added))
@@ -8724,6 +8729,58 @@ func tinyjsonC3EncodeBucketRestockedEvent(out *jwriter.Writer, in BucketRestocke
 
 func (v BucketRestockedEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonC3EncodeBucketRestockedEvent(w, v)
+}
+
+// BucketEntry gains an ENCODER (it previously only decoded, being an input
+// type) so bucket events can carry their entries and an indexer can mirror a
+// bucket's contents from the log alone.
+func tinyjsonC3EncodeBucketEntry(out *jwriter.Writer, in BucketEntry) {
+	out.RawByte('{')
+	{
+		const p2 string = ",\"tokenId\":"
+		out.RawString(p2[1:])
+		out.String(string(in.TokenId))
+	}
+	{
+		const p2 string = ",\"amount\":"
+		out.RawString(p2)
+		out.Uint64(uint64(in.Amount))
+	}
+	{
+		const p2 string = ",\"pool\":"
+		out.RawString(p2)
+		out.Uint64(uint64(in.Pool))
+	}
+	out.RawByte('}')
+}
+
+func (v BucketEntry) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBucketEntry(w, v)
+}
+
+// writeBucketEntries emits an entries array, or [] when empty — never null,
+// because a consumer that has to special-case null for "no entries" will
+// eventually forget to.
+func writeBucketEntries(out *jwriter.Writer, entries []BucketEntry) {
+	out.RawByte('[')
+	for i, e := range entries {
+		if i > 0 {
+			out.RawByte(',')
+		}
+		(e).MarshalTinyJSON(out)
+	}
+	out.RawByte(']')
+}
+
+func writeUint64Array(out *jwriter.Writer, xs []uint64) {
+	out.RawByte('[')
+	for i, x := range xs {
+		if i > 0 {
+			out.RawByte(',')
+		}
+		out.Uint64(x)
+	}
+	out.RawByte(']')
 }
 
 func tinyjsonC3EncodeBucketListedEvent(out *jwriter.Writer, in BucketListedEvent) {
@@ -8753,9 +8810,54 @@ func tinyjsonC3EncodeBucketListedEvent(out *jwriter.Writer, in BucketListedEvent
 			out.String(string(in.Attributes.NftContract))
 		}
 		{
+			const p2 string = ",\"paymentToken\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.PaymentToken))
+		}
+		{
+			const p2 string = ",\"pricePerDraw\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.PricePerDraw))
+		}
+		{
+			const p2 string = ",\"pricePerPack\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.PricePerPack))
+		}
+		{
+			const p2 string = ",\"packDraws\":"
+			out.RawString(p2)
+			writeUint64Array(out, in.Attributes.PackDraws)
+		}
+		{
+			const p2 string = ",\"expirationBlock\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.ExpirationBlock))
+		}
+		{
+			const p2 string = ",\"feeBps\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.FeeBps))
+		}
+		{
+			const p2 string = ",\"royaltyBps\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.RoyaltyBps))
+		}
+		{
+			const p2 string = ",\"royaltyRecipient\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.RoyaltyRecipient))
+		}
+		{
 			const p2 string = ",\"entries\":"
 			out.RawString(p2)
-			out.Uint64(uint64(in.Attributes.Entries))
+			writeBucketEntries(out, in.Attributes.Entries)
+		}
+		{
+			const p2 string = ",\"entryCount\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.EntryCount))
 		}
 		{
 			const p2 string = ",\"units\":"
@@ -8801,6 +8903,11 @@ func tinyjsonC3EncodeBucketDrawEvent(out *jwriter.Writer, in BucketDrawEvent) {
 			const p2 string = ",\"tokenId\":"
 			out.RawString(p2)
 			out.String(string(in.Attributes.TokenId))
+		}
+		{
+			const p2 string = ",\"pool\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Pool))
 		}
 		{
 			const p2 string = ",\"drawIndex\":"
@@ -8853,6 +8960,11 @@ func tinyjsonC3EncodeBucketPurchaseEvent(out *jwriter.Writer, in BucketPurchaseE
 			out.Uint64(uint64(in.Attributes.Draws))
 		}
 		{
+			const p2 string = ",\"paymentToken\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.PaymentToken))
+		}
+		{
 			const p2 string = ",\"paid\":"
 			out.RawString(p2)
 			out.String(string(in.Attributes.Paid))
@@ -8866,6 +8978,11 @@ func tinyjsonC3EncodeBucketPurchaseEvent(out *jwriter.Writer, in BucketPurchaseE
 			const p2 string = ",\"royalty\":"
 			out.RawString(p2)
 			out.String(string(in.Attributes.Royalty))
+		}
+		{
+			const p2 string = ",\"unitsLeft\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.UnitsLeft))
 		}
 		out.RawByte('}')
 	}
@@ -8901,6 +9018,16 @@ func tinyjsonC3EncodeBucketEntryDroppedEvent(out *jwriter.Writer, in BucketEntry
 			const p2 string = ",\"tokenId\":"
 			out.RawString(p2)
 			out.String(string(in.Attributes.TokenId))
+		}
+		{
+			const p2 string = ",\"pool\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Pool))
+		}
+		{
+			const p2 string = ",\"units\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Units))
 		}
 		{
 			const p2 string = ",\"reason\":"
@@ -8954,4 +9081,39 @@ func tinyjsonC3EncodeBucketDelistedEvent(out *jwriter.Writer, in BucketDelistedE
 
 func (v BucketDelistedEvent) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonC3EncodeBucketDelistedEvent(w, v)
+}
+
+func tinyjsonC3EncodeBucketSoldOutEvent(out *jwriter.Writer, in BucketSoldOutEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"bucketId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.BucketId))
+		}
+		{
+			const p2 string = ",\"seller\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Seller))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v BucketSoldOutEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBucketSoldOutEvent(w, v)
 }

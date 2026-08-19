@@ -537,12 +537,18 @@ func emitRentalDelisted(rentalId uint64, owner string) {
 // Bucket Events (random-draw sales)
 // ===================================
 
-func emitBucketListed(bucketId uint64, seller, nftContract string, entries, units uint64) {
+func emitBucketListed(bucketId uint64, seller, nftContract, paymentToken, pricePerDraw, pricePerPack string,
+	packDraws []uint64, expirationBlock, feeBps, royaltyBps uint64, royaltyRecipient string,
+	entries []BucketEntry, units uint64) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BucketListedEvent{
 		Type: "bucket_listed",
 		Attributes: BucketListedAttributes{
-			BucketId: bucketId, Seller: seller, NftContract: nftContract, Entries: entries, Units: units,
+			BucketId: bucketId, Seller: seller, NftContract: nftContract,
+			PaymentToken: paymentToken, PricePerDraw: pricePerDraw, PricePerPack: pricePerPack,
+			PackDraws: packDraws, ExpirationBlock: expirationBlock,
+			FeeBps: feeBps, RoyaltyBps: royaltyBps, RoyaltyRecipient: royaltyRecipient,
+			Entries: entries, EntryCount: uint64(len(entries)), Units: units,
 		},
 		Tx: *txID,
 	}
@@ -551,12 +557,13 @@ func emitBucketListed(bucketId uint64, seller, nftContract string, entries, unit
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitBucketRestocked(bucketId uint64, seller string, added, totalEntries, unitsAdded uint64) {
+func emitBucketRestocked(bucketId uint64, seller string, entries []BucketEntry, totalEntries, unitsAdded uint64) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BucketRestockedEvent{
 		Type: "bucket_restocked",
 		Attributes: BucketRestockedAttributes{
-			BucketId: bucketId, Seller: seller, Added: added, TotalEntries: totalEntries, UnitsAdded: unitsAdded,
+			BucketId: bucketId, Seller: seller, Entries: entries,
+			Added: uint64(len(entries)), TotalEntries: totalEntries, UnitsAdded: unitsAdded,
 		},
 		Tx: *txID,
 	}
@@ -565,12 +572,12 @@ func emitBucketRestocked(bucketId uint64, seller string, added, totalEntries, un
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitBucketDraw(bucketId uint64, buyer, tokenId string, drawIndex uint64) {
+func emitBucketDraw(bucketId uint64, buyer, tokenId string, pool, drawIndex uint64) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BucketDrawEvent{
 		Type: "bucket_draw",
 		Attributes: BucketDrawAttributes{
-			BucketId: bucketId, Buyer: buyer, TokenId: tokenId, DrawIndex: drawIndex,
+			BucketId: bucketId, Buyer: buyer, TokenId: tokenId, Pool: pool, DrawIndex: drawIndex,
 		},
 		Tx: *txID,
 	}
@@ -579,12 +586,13 @@ func emitBucketDraw(bucketId uint64, buyer, tokenId string, drawIndex uint64) {
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitBucketPurchase(bucketId uint64, buyer, mode string, draws uint64, paid, fee, royalty string) {
+func emitBucketPurchase(bucketId uint64, buyer, mode string, draws uint64, paymentToken, paid, fee, royalty string, unitsLeft uint64) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BucketPurchaseEvent{
 		Type: "bucket_purchase",
 		Attributes: BucketPurchaseAttributes{
-			BucketId: bucketId, Buyer: buyer, Mode: mode, Draws: draws, Paid: paid, Fee: fee, Royalty: royalty,
+			BucketId: bucketId, Buyer: buyer, Mode: mode, Draws: draws,
+			PaymentToken: paymentToken, Paid: paid, Fee: fee, Royalty: royalty, UnitsLeft: unitsLeft,
 		},
 		Tx: *txID,
 	}
@@ -593,14 +601,26 @@ func emitBucketPurchase(bucketId uint64, buyer, mode string, draws uint64, paid,
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitBucketEntryDropped(bucketId uint64, tokenId, reason string) {
+func emitBucketEntryDropped(bucketId uint64, tokenId string, pool, units uint64, reason string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BucketEntryDroppedEvent{
 		Type: "bucket_entry_dropped",
 		Attributes: BucketEntryDroppedAttributes{
-			BucketId: bucketId, TokenId: tokenId, Reason: reason,
+			BucketId: bucketId, TokenId: tokenId, Pool: pool, Units: units, Reason: reason,
 		},
 		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitBucketSoldOut(bucketId uint64, seller string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BucketSoldOutEvent{
+		Type:       "bucket_sold_out",
+		Attributes: BucketSoldOutAttributes{BucketId: bucketId, Seller: seller},
+		Tx:         *txID,
 	}
 	w := jwriter.Writer{}
 	event.MarshalTinyJSON(&w)

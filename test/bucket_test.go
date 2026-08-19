@@ -1684,3 +1684,115 @@ func listHostileBucket(t *testing.T, ct *test_utils.ContractTest, seller, tokenI
 	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
 	return ParseCreated(res).Id
 }
+
+// TestBucketEventsMirrorState pins the event log as an INTERFACE.
+//
+// The indexer reconstructs bucket state from these events alone — it is
+// mapping-driven, so an attribute that is not emitted simply cannot be stored.
+// That makes the payloads a contract with a downstream consumer, and one that
+// is expensive to change after deployment: fixing an omission later needs a
+// contract update AND a reindex.
+//
+// So this asserts the SHAPE of what a mirror needs, not merely that events fire.
+func TestBucketEventsMirrorState(t *testing.T) {
+	ct := SetupContractTest()
+	seller := ownerAddress
+	FundRc(t, ct, seller, 2_000_000)
+	InitFullSetup(t, ct)
+
+	buyer := "hive:evbuyer"
+	// Five purchases across two buckets, well past the free tier.
+	FundRc(t, ct, buyer, 2_000_000)
+	CallMarket(t, ct, "setRoyaltySplits",
+		[]byte(fmt.Sprintf(`{"nftContract":"%s","splits":[{"recipient":"hive:artist","bps":400}]}`, NftContractID)),
+		nil, ownerAddress, "", true, gas, "")
+
+	MintNft(t, ct, seller, "evcommon", 4, 4)
+	MintNft(t, ct, seller, "evrare", 2, 2)
+	MintNft(t, ct, seller, "evextra", 2, 2)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	// ---- listing: every commercial term plus the entries themselves ----
+	entries := bucketPoolEntriesJSON([][3]string{{"evcommon", "4", "0"}, {"evrare", "2", "1"}})
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"1000","packDraws":[2,1],"expirationBlock":9999}`,
+		NftContractID, entries, TokenID)
+	res, _, listLogs := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
+	id := ParseCreated(res).Id
+
+	for _, want := range []string{
+		`"paymentToken":"paytoken"`, // which currency
+		`"pricePerDraw":"0"`,        // single draws disabled
+		`"pricePerPack":"1000"`,     // and what a pack costs
+		`"packDraws":[2,1]`,         // the pack's shape, for showing odds
+		`"expirationBlock":9999`,    // when it closes
+		`"feeBps":250`,              // fee snapshot taken at list time
+		`"royaltyBps":400`,          // royalty snapshot
+		`"entries":[{"tokenId":"evcommon","amount":4,"pool":0},{"tokenId":"evrare","amount":2,"pool":1}]`,
+		`"entryCount":2`,
+		`"units":6`,
+	} {
+		AssertEventContains(t, listLogs, "bucket_listed", want)
+	}
+
+	// ---- restock: the added entries, not just a count ----
+	add := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id,
+		bucketPoolEntriesJSON([][3]string{{"evextra", "2", "0"}}))
+	_, _, addLogs := CallMarket(t, ct, "addToBucket", []byte(add), nil, seller, "", true, gas, "")
+	AssertEventContains(t, addLogs, "bucket_restocked",
+		`"entries":[{"tokenId":"evextra","amount":2,"pool":0}]`)
+	AssertEventContains(t, addLogs, "bucket_restocked", `"totalEntries":3`)
+	AssertEventContains(t, addLogs, "bucket_restocked", `"unitsAdded":2`)
+
+	// ---- purchase: which pool each draw came from, and what is left ----
+	pack := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
+	_, _, buyLogs := CallMarket(t, ct, "buyFromBucket", []byte(pack), nil, buyer, "", true, gas, "")
+
+	// A draw names its pool, so a mirror can decrement the right one.
+	AssertEventContains(t, buyLogs, "bucket_draw", `"pool":1`)
+	AssertEventContains(t, buyLogs, "bucket_purchase", `"paymentToken":"paytoken"`)
+	AssertEventContains(t, buyLogs, "bucket_purchase", `"paid":"1000"`)
+	// 8 units, a 3-card pack drawn: 5 left. unitsLeft lets a mirror reconcile
+	// rather than accumulate, so a single missed event cannot desync it forever.
+	AssertEventContains(t, buyLogs, "bucket_purchase", `"unitsLeft":5`)
+	assert.Empty(t, FindEventsInLogs(buyLogs, "bucket_sold_out"), "still stock left")
+
+	// ---- a stale entry names its pool and how many units it took with it ----
+	away := fmt.Sprintf(`{"from":"%s","to":"hive:elsewhere","id":"evextra","amount":2,"data":""}`, seller)
+	CallNft(t, ct, "safeTransferFrom", []byte(away), nil, seller, true, gas, "")
+	_, _, dropLogs := CallMarket(t, ct, "buyFromBucket", []byte(pack), nil, buyer, "", true, gas, "")
+	if events := FindEventsInLogs(dropLogs, "bucket_entry_dropped"); len(events) > 0 {
+		AssertEventContains(t, dropLogs, "bucket_entry_dropped", `"tokenId":"evextra"`)
+		AssertEventContains(t, dropLogs, "bucket_entry_dropped", `"pool":0`)
+		AssertEventContains(t, dropLogs, "bucket_entry_dropped", `"units":2`)
+	}
+
+	// ---- selling out closes the bucket, and SAYS SO ----
+	//
+	// On a SEPARATE single-pool bucket, because a bucket with guaranteed slots
+	// cannot reliably sell out at all: the guaranteed pool empties first and
+	// strands whatever is left in the others. That is inherent to slot
+	// guarantees, and a good reason for a mirror to track units per pool rather
+	// than assume a bucket drains evenly.
+	MintNft(t, ct, seller, "evflat", 4, 4)
+	flatEntries := bucketPoolEntriesJSON([][3]string{{"evflat", "4", "0"}})
+	flatPayload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"1000","packDraws":[2],"expirationBlock":0}`,
+		NftContractID, flatEntries, TokenID)
+	flatRes, _, _ := CallMarket(t, ct, "listBucket", []byte(flatPayload), nil, seller, "", true, gas, "")
+	flatId := ParseCreated(flatRes).Id
+
+	flatPack := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, flatId)
+	_, _, first := CallMarket(t, ct, "buyFromBucket", []byte(flatPack), nil, buyer, "", true, gas, "")
+	assert.Empty(t, FindEventsInLogs(first, "bucket_sold_out"), "two units still left")
+	AssertEventContains(t, first, "bucket_purchase", `"unitsLeft":2`)
+
+	// The purchase that empties it.
+	_, _, last := CallMarket(t, ct, "buyFromBucket", []byte(flatPack), nil, buyer, "", true, gas, "")
+	AssertEventContains(t, last, "bucket_purchase", `"unitsLeft":0`)
+	AssertEventContains(t, last, "bucket_sold_out", fmt.Sprintf(`"bucketId":%d`, flatId))
+	AssertEventContains(t, last, "bucket_sold_out", fmt.Sprintf(`"seller":"%s"`, seller))
+
+	CallMarket(t, ct, "buyFromBucket", []byte(flatPack), nil, buyer, "", false, gas, "Bucket not active")
+}

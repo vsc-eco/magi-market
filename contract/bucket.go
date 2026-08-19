@@ -230,11 +230,11 @@ func (d *bucketDraw) deliverable(pool, idx, amt uint64, tokenId, nc, seller, con
 	backed := amt
 	if !operatorApproved && nftAllowanceOf(nc, seller, contractAddr, tokenId) < 1 {
 		live = false
-		emitBucketEntryDropped(d.id, tokenId, "approval revoked")
+		emitBucketEntryDropped(d.id, tokenId, pool, amt, "approval revoked")
 	} else if held := nftBalanceOf(nc, seller, tokenId); held < amt {
 		if held == 0 {
 			live = false
-			emitBucketEntryDropped(d.id, tokenId, "seller no longer holds it")
+			emitBucketEntryDropped(d.id, tokenId, pool, amt, "seller no longer holds it")
 		} else {
 			// Partially moved on: keep what is genuinely still there.
 			backed = held
@@ -477,7 +477,9 @@ func ListBucket(payload *string) *string {
 	snapshotRoyaltySplitsForBucket(id, snapRecips, snapBps)
 	setNextBucketId(id + 1)
 
-	emitBucketListed(id, caller, p.NftContract, uint64(len(p.Entries)), units)
+	emitBucketListed(id, caller, p.NftContract, p.PaymentToken,
+		formatMoney(priceSingle), formatMoney(pricePack), p.PackDraws, p.ExpirationBlock,
+		feeBps, royaltyBps, getRoyaltyRecipient(p.NftContract), p.Entries, units)
 	return jsonResponse(&CreatedResponse{Success: true, Id: id})
 }
 
@@ -535,7 +537,7 @@ func AddToBucket(payload *string) *string {
 
 	units := appendBucketEntries(p.BucketId, p.Entries)
 
-	emitBucketRestocked(p.BucketId, caller, uint64(len(p.Entries)), total, units)
+	emitBucketRestocked(p.BucketId, caller, p.Entries, total, units)
 	return jsonResponse(&SuccessResponse{Success: true})
 }
 
@@ -690,15 +692,18 @@ func BuyFromBucket(payload *string) *string {
 	base := seedBase()
 
 	drawn := make([]string, 0, draws)
+	drawnPools := make([]uint64, 0, draws)
 	for i, pool := range plan {
 		drawn = append(drawn, drawOne(table, base, p.BucketId, nc, seller, contractAddr, operatorApproved, pool, uint64(i)))
+		drawnPools = append(drawnPools, pool)
 	}
 
 	// CEI: flush the decremented table and the sold-out flag BEFORE any external
 	// call, so a re-entry through a malicious payment token or NFT contract
 	// cannot see units it has already been promised.
 	table.flush()
-	if table.total == 0 {
+	soldOut := table.total == 0
+	if soldOut {
 		setBucketField(p.BucketId, "act", "0")
 	}
 
@@ -734,7 +739,7 @@ func BuyFromBucket(payload *string) *string {
 	// One event per delivered unit — the indexer wants a row per NFT, not a
 	// list it has to unpack.
 	for i, tokenId := range drawn {
-		emitBucketDraw(p.BucketId, caller, tokenId, uint64(i))
+		emitBucketDraw(p.BucketId, caller, tokenId, drawnPools[i], uint64(i))
 	}
 
 	if !mIsZero(fee) {
@@ -749,7 +754,13 @@ func BuyFromBucket(payload *string) *string {
 	if mode == "" {
 		mode = "single"
 	}
-	emitBucketPurchase(p.BucketId, caller, mode, draws, formatMoney(received), formatMoney(fee), formatMoney(royTot))
+	emitBucketPurchase(p.BucketId, caller, mode, draws, pt,
+		formatMoney(received), formatMoney(fee), formatMoney(royTot), table.total)
+	// Emitted AFTER the purchase event so a consumer sees the sale that closed
+	// the bucket before it sees the bucket close.
+	if soldOut {
+		emitBucketSoldOut(p.BucketId, seller)
+	}
 	return jsonResponse(&SuccessResponse{Success: true})
 }
 
