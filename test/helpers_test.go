@@ -61,6 +61,13 @@ const MintNftMockID = "mintnftmock"
 // the retry-on-loss attack on random draws.
 const CallerMockID = "callermock"
 
+// HostileNftID is a collection that misbehaves during delivery — it can refuse
+// a transfer outright, or read the market's own state from inside one. Both are
+// needed to test claims that a well-behaved collection can never exercise: that
+// a failed transfer aborts the purchase, and that the market writes its state
+// BEFORE calling out (CEI).
+const HostileNftID = "hostilenft"
+
 const ownerAddress = "hive:tibfox"
 const feeRecipientAddress = "hive:feerecipient"
 
@@ -93,6 +100,9 @@ var MintNftMockWasm []byte
 //go:embed artifacts/callermock.wasm
 var CallerMockWasm []byte
 
+//go:embed artifacts/hostilenft.wasm
+var HostileNftWasm []byte
+
 const defaultTimestamp = "2025-09-03T00:00:00"
 
 const gas = uint(500_000_000)
@@ -117,6 +127,7 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct.RegisterContract(DexMockID, ownerAddress, DexMockWasm)
 	ct.RegisterContract(MintNftMockID, ownerAddress, MintNftMockWasm)
 	ct.RegisterContract(CallerMockID, ownerAddress, CallerMockWasm)
+	ct.RegisterContract(HostileNftID, ownerAddress, HostileNftWasm)
 	return &ct
 }
 
@@ -174,6 +185,19 @@ func CallNft(
 	expectedOutput string,
 ) (test_utils.ContractTestCallResult, uint, map[string]contract_session.LogOutput) {
 	return callContract(t, ct, NftContractID, action, payload, intents, authUser, defaultTimestamp, expectedResult, maxGas, expectedOutput)
+}
+
+// CallHostileNft drives the misbehaving collection mock.
+func CallHostileNft(
+	t *testing.T,
+	ct *test_utils.ContractTest,
+	action string,
+	payload json.RawMessage,
+	authUser string,
+	expectedResult bool,
+	expectedOutput string,
+) (test_utils.ContractTestCallResult, uint, map[string]contract_session.LogOutput) {
+	return callContract(t, ct, HostileNftID, action, payload, nil, authUser, defaultTimestamp, expectedResult, gas, expectedOutput)
 }
 
 func callContract(

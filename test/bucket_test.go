@@ -1528,3 +1528,159 @@ func TestBucketPrunesStaleEntryInLaterChunk(t *testing.T) {
 	assert.Equal(t, uint64(5), delivered2, "the bucket keeps drawing correctly after the prune")
 	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, secondBuyer, stale), "still never delivered")
 }
+
+// ===================================
+// Bounded pruning, and a collection that misbehaves
+// ===================================
+
+// TestBucketMaxStaleRetriesBoundsPruning proves the draw gives up rather than
+// pruning an unbounded number of stale entries.
+//
+// The seller keeps custody, so entries CAN go stale, and pruning them is right.
+// But each prune costs a cross-contract call, so a bucket whose whole stock has
+// moved on would otherwise burn the buyer's entire budget discovering that. The
+// bound is what stops one buyer paying to clean up after the seller.
+//
+// The abort MESSAGE is what pins the bound. With 20 stale entries and a cap of
+// 12, the draw prunes 13 and gives up while units still remain — "No deliverable
+// entries left in bucket". Without the cap it would prune all 20, drive the pool
+// to zero, and abort with "Bucket pool is sold out" instead. So the message
+// distinguishes bounded from unbounded pruning, deterministically.
+func TestBucketMaxStaleRetriesBoundsPruning(t *testing.T) {
+	ct := SetupContractTest()
+
+	seller := ownerAddress
+	// The seller mints 20 ids, lists them and then moves every one away.
+	FundRc(ct, seller, 5_000_000)
+
+	InitFullSetup(t, ct)
+
+	buyer := "hive:staleretrybuyer"
+	ids := make([]string, 0, 20)
+	entries := make([][2]string, 0, 20)
+	for i := 0; i < 20; i++ {
+		id := fmt.Sprintf("sr%02d", i)
+		ids = append(ids, id)
+		entries = append(entries, [2]string{id, "1"})
+	}
+	MintNftBatch(t, ct, seller, ids, 1, 1)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
+		NftContractID, bucketEntriesJSON(entries), TokenID)
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, bigGas, "")
+	id := ParseCreated(res).Id
+
+	// Every single unit moves on AFTER listing.
+	for _, tid := range ids {
+		away := fmt.Sprintf(`{"from":"%s","to":"hive:elsewhere","id":"%s","amount":1,"data":""}`, seller, tid)
+		CallNft(t, ct, "safeTransferFrom", []byte(away), nil, seller, true, gas, "")
+	}
+
+	buyerBefore := QueryTokenBalance(t, ct, buyer)
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, bigGas,
+		"No deliverable entries left in bucket")
+
+	assert.Equal(t, buyerBefore, QueryTokenBalance(t, ct, buyer),
+		"a purchase that could not be delivered costs nothing but RC")
+}
+
+// TestBucketHostileCollectionFailingTransferAbortsPurchase proves a refused
+// delivery takes the whole purchase down with it.
+//
+// The market has already taken payment and written its state by the time it
+// calls the collection. If a failed transfer were swallowed, the buyer would pay
+// for a card that never moved and the bucket would count it as sold. Only a
+// collection that refuses can test this — the real one always cooperates.
+func TestBucketHostileCollectionFailingTransferAbortsPurchase(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:hostilebuyer"
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	stockHostileCollection(t, ct, seller, "hx", 5)
+	id := listHostileBucket(t, ct, seller, "hx", 5)
+
+	// Arm the refusal.
+	CallHostileNft(t, ct, "setMode", []byte(`{"mode":"fail"}`), seller, true, "")
+
+	buyerBefore := QueryTokenBalance(t, ct, buyer)
+	sellerBefore := QueryTokenBalance(t, ct, seller)
+
+	// The COLLECTION's message comes back, not the market's. A sub-contract
+	// that aborts takes the whole transaction down where it stands, so the
+	// market's own "safeBatchTransferFrom call failed" guard is never reached —
+	// that branch only fires if a callee returns nothing WITHOUT aborting.
+	// Either way the property that matters holds: the purchase does not
+	// half-complete.
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas,
+		"hostile collection refuses to transfer")
+
+	// Nothing moved: not the buyer's money, not the seller's proceeds.
+	assert.Equal(t, buyerBefore, QueryTokenBalance(t, ct, buyer),
+		"buyer must not pay for a card the collection refused to move")
+	assert.Equal(t, sellerBefore, QueryTokenBalance(t, ct, seller),
+		"seller must not be paid for a delivery that failed")
+}
+
+// TestBucketWritesStateBeforeDelivering proves the CEI ordering the design
+// claims: state is flushed BEFORE the external call, so a collection that
+// re-enters cannot see units it has already been promised.
+//
+// The hostile collection reads the market's own bucket counter from inside
+// safeBatchTransferFrom. If the market flushed first, the value visible
+// mid-delivery is already the POST-purchase count. If it flushed afterwards, the
+// pre-purchase count would leak — and that gap is exactly what a re-entrant
+// collection would spend.
+func TestBucketWritesStateBeforeDelivering(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:ceibuyer"
+	MintAndApproveToken(t, ct, buyer, 100000)
+
+	stockHostileCollection(t, ct, seller, "cei", 5)
+	id := listHostileBucket(t, ct, seller, "cei", 5)
+
+	// Point the spy at this bucket.
+	CallHostileNft(t, ct, "setMode",
+		[]byte(fmt.Sprintf(`{"mode":"spy","market":"%s","bucketId":%d}`, MarketContractID, id)),
+		seller, true, "")
+
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
+
+	// 5 units, one drawn: a collection called mid-purchase must already see 4.
+	// Seeing 5 would mean the market had promised a unit it had not yet booked.
+	seen := ct.StateGet(HostileNftID, "seen")
+	assert.Equal(t, "4", seen,
+		"the market must write its state BEFORE calling out; mid-delivery the bucket should already read 4, not 5")
+}
+
+// stockHostileCollection gives the hostile mock the shape the market reads:
+// an owner, a balance, and blanket approval.
+func stockHostileCollection(t *testing.T, ct *test_utils.ContractTest, seller, tokenId string, amount uint64) {
+	t.Helper()
+	CallHostileNft(t, ct, "setOwner",
+		[]byte(fmt.Sprintf(`{"owner":"%s"}`, seller)), seller, true, "")
+	CallHostileNft(t, ct, "setBalance",
+		[]byte(fmt.Sprintf(`{"account":"%s","id":"%s","amount":%d}`, seller, tokenId, amount)), seller, true, "")
+	CallHostileNft(t, ct, "setOperator",
+		[]byte(fmt.Sprintf(`{"owner":"%s","operator":"%s"}`, seller, MarketContractAddress)), seller, true, "")
+}
+
+func listHostileBucket(t *testing.T, ct *test_utils.ContractTest, seller, tokenId string, amount uint64) uint64 {
+	t.Helper()
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":[{"tokenId":"%s","amount":%d,"pool":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
+		HostileNftID, tokenId, amount, TokenID)
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
+	return ParseCreated(res).Id
+}
