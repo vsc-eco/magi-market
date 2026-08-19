@@ -28,8 +28,12 @@ column:
 | Raffle | 2 designs, 41 cards | 1,049 | **2,123** | 3,172 | ~4,000 |
 | Four-tier mystery | 4 designs, 38 cards | 1,914 | **3,152** | 5,066 | ~4,470 |
 | 52-card deck | 52 designs, 52 cards | 12,440 | **9,818** | 22,258 | ~8,000 |
+| Gachapon machine | 3 designs, 121 capsules | 1,534 | **2,521** | 4,055 | ~1,961 |
+| Art print drop | 3 designs, 30 prints | 1,453 | **4,425** | 5,878 | 2,418 / 3,665 |
+| Flash drop | 1 design, 12 shirts | 586 | **1,710** | 2,296 | ~1,945 |
+| Loot crate shop | 4 designs, 24 items | 1,930 | **3,386** | 5,316 | ~4,453 |
 
-For the three small products the market side dominates. For the deck it flips:
+For the small products the market side dominates. For the deck it flips:
 **minting 52 distinct designs costs more than the bucket does** (12,440 vs
 9,818), and that is true before the bucket is involved at all.
 
@@ -125,6 +129,108 @@ splitting.
 
 Four pools cost ~880 RC more to list than two, and ~1,470 more per pack than a
 5-card two-pool pack. Tiered guarantees are affordable.
+
+---
+
+## Gachapon capsule machine
+
+**Inventory:** 3 designs, 121 capsules — `common` ×100, `rare` ×20, `chase` ×1,
+all in pool 0
+**Sold as:** single pulls only — no packs, no pools
+**Odds:** by unit weight. The chase is 1-in-121 per pull and nothing promises it
+
+| who | contract | operation | RC |
+|---|---|---|---:|
+| seller | nft | mint 3 designs (100 + 20 + 1 copies) | 1,368 |
+| seller | nft | `setApprovalForAll` | 166 |
+| seller | | *NFT subtotal* | *1,534* |
+| seller | market | `listBucket` — 3 entries, 1 pool | 2,521 |
+| seller | | **total to launch** | **4,055** |
+| buyer | market | one pull | **~1,961** |
+
+The **cheapest purchase in the suite** and the opposite design to a booster
+pack: odds instead of guarantees. Note the flip side — at 1,961 RC per single
+pull, eight pulls cost 15,688, where eight cards inside one pack cost a fraction
+of that. Per-pull pricing is a product decision that buyers pay for in RC.
+
+---
+
+## Art print drop — single or portfolio, with royalties
+
+**Inventory:** 3 plates, 30 prints — `dawn`/`dusk`/`noon` ×10 each, pool 0
+**Sold as:** BOTH modes — one print for 5,000, or a 5-print portfolio for
+20,000 (the price of four)
+**Royalties:** 5% artist, 2.5% gallery, on top of the 2.5% market fee
+
+| who | contract | operation | RC |
+|---|---|---|---:|
+| seller | nft | mint 3 plates (10 copies each) | 1,287 |
+| seller | nft | `setApprovalForAll` | 166 |
+| seller | | *NFT subtotal* | *1,453* |
+| seller | market | `setRoyaltySplits` | 1,091 |
+| seller | market | `listBucket` — 3 entries, both modes | 3,334 |
+| seller | | *market subtotal* | *4,425* |
+| seller | | **total to launch** | **5,878** |
+| buyer | market | buy one print | **2,418** |
+| buyer | market | buy a 5-print portfolio | **3,665** |
+
+Money on a 5,000 single: 125 market fee, 250 artist, 125 gallery, 4,500 seller.
+On the 20,000 portfolio: 500 / 1,000 / 500 / 18,000 — the split scales with the
+sale and is paid ONCE per purchase, not per print.
+
+Both modes on one bucket costs the seller nothing extra to enable, and the
+portfolio is better value for the buyer twice over: cheaper per print, and
+3,665 RC for five prints against 2,418 for one.
+
+---
+
+## Flash drop with a deadline
+
+**Inventory:** 1 design, 12 shirts, pool 0
+**Sold as:** single draws, `expirationBlock` 50 blocks out
+**Closes:** on the deadline, not on selling out
+
+| who | contract | operation | RC |
+|---|---|---|---:|
+| seller | nft | mint 1 design (12 copies) | 420 |
+| seller | nft | `setApprovalForAll` | 166 |
+| seller | | *NFT subtotal* | *586* |
+| seller | market | `listBucket` — 1 entry, expiring | 1,710 |
+| seller | | **total to launch** | **2,296** |
+| buyer | market | buy inside the window | **~1,945** |
+
+**The cheapest product to launch here.** Expiry stops the sale without
+confiscating anything: the 9 unsold shirts stay with the seller, which is what
+makes a timed drop safe to run.
+
+---
+
+## Loot crate shop — bulk buys and a live restock
+
+**Inventory:** 2 designs, 19 items to start — `common` ×16 (pool 0), `gold` ×3
+(pool 1); later restocked with 2 more designs, 5 more items
+**Sold as:** crates of 4, `packDraws [3,1]` — 3 commons + 1 guaranteed gold
+**Shows:** buying several crates in ONE transaction, and topping up mid-sale
+
+| who | contract | operation | RC |
+|---|---|---|---:|
+| seller | nft | mint 4 designs across two rounds | 1,764 |
+| seller | nft | `setApprovalForAll` | 166 |
+| seller | | *NFT subtotal* | *1,930* |
+| seller | market | `listBucket` — 2 entries, 2 pools | 2,187 |
+| seller | market | `addToBucket` — restock a live bucket | 1,199 |
+| seller | | *market subtotal* | *3,386* |
+| seller | | **total to launch + restock** | **5,316** |
+| buyer | market | **3 crates at once** (12 draws) | **4,453** |
+| buyer | market | 1 crate after the restock | **3,065** |
+
+Buying in bulk is where packs pay off hardest: three crates in one transaction
+cost 4,453 RC, while one crate alone costs 3,065 — **1,484 per crate versus
+3,065**, because the fixed ~1,840 is paid once instead of three times.
+
+Restocking a live bucket is cheap (1,199) but **append-only**: a token id
+already in the bucket cannot be added again, so a top-up brings new ids — which
+is what a real shop does anyway.
 
 ---
 

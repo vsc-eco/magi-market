@@ -237,3 +237,255 @@ func rcLog(t *testing.T, label string, res test_utils.ContractTestCallResult) {
 	t.Helper()
 	t.Logf("RCCOST %-44s %6d", label, res.RcUsed)
 }
+
+// TestScenarioGachaponCapsuleMachine — "keep pulling until you get the chase".
+//
+// The opposite of a booster pack. One pool, no slot guarantees, no packs: you
+// pay per pull and the odds come from how many units of each design are in the
+// machine. A 1-of-1 chase figure among 121 capsules is simply 1-in-121 on every
+// pull, and nothing promises you will ever see it.
+//
+// This is the shape to reach for when you want odds rather than guarantees —
+// and the cheapest bucket to run, because one pool needs no pack layout at all.
+func TestScenarioGachaponCapsuleMachine(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	collector := "hive:gacha"
+	FundRc(t, ct, collector, 2_000_000) // eight separate pulls, not one pack
+
+	MintNft(t, ct, seller, "capsulecommon", 100, 100)
+	MintNft(t, ct, seller, "capsulerare", 20, 20)
+	MintNft(t, ct, seller, "capsulechase", 1, 1)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, collector, 100000)
+
+	// Everything in ONE pool: weight comes from unit counts, not slots.
+	entries := bucketPoolEntriesJSON([][3]string{
+		{"capsulecommon", "100", "0"},
+		{"capsulerare", "20", "0"},
+		{"capsulechase", "1", "0"},
+	})
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"300","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
+		NftContractID, entries, TokenID)
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
+	rcLog(t, "gachapon/seller: list bucket (3 entries, 1 pool)", res)
+	id := ParseCreated(res).Id
+
+	pull := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	for i := 0; i < 8; i++ {
+		pullRes, _, _ := CallMarket(t, ct, "buyFromBucket", []byte(pull), nil, collector, "", true, gas, "")
+		if i == 0 {
+			rcLog(t, "gachapon/buyer:  one pull", pullRes)
+		}
+	}
+
+	// Eight pulls, eight capsules — whatever they turned out to be.
+	got := QueryNftBalance(t, ct, collector, "capsulecommon") +
+		QueryNftBalance(t, ct, collector, "capsulerare") +
+		QueryNftBalance(t, ct, collector, "capsulechase")
+	assert.Equal(t, uint64(8), got, "eight pulls must yield eight capsules")
+
+	// The chase is a 1-of-1: winnable, but never twice, and never duplicated.
+	assert.LessOrEqual(t, QueryNftBalance(t, ct, collector, "capsulechase"), uint64(1),
+		"there is exactly one chase figure in the machine")
+}
+
+// TestScenarioArtPrintDropWithRoyalty — "one print, or the whole portfolio".
+//
+// A gallery drop where both sale modes are live at once: a single print, or a
+// five-print portfolio at a discount. The artist takes a cut of every sale
+// through royalty splits, so this is also the scenario that shows the money
+// actually dividing four ways — artist, gallery, marketplace fee, seller.
+func TestScenarioArtPrintDropWithRoyalty(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	buyer := "hive:artfan"
+	// The seller mints three plates, sets royalty splits and lists; the buyer
+	// makes two purchases. Both run past the free tier.
+	FundRc(t, ct, seller, 2_000_000)
+	FundRc(t, ct, buyer, 2_000_000)
+
+	// 5% to the artist, 2.5% to the gallery, on top of the 2.5% market fee.
+	splits := fmt.Sprintf(
+		`{"nftContract":"%s","splits":[{"recipient":"hive:artist","bps":500},{"recipient":"hive:gallery","bps":250}]}`,
+		NftContractID)
+	CallMarket(t, ct, "setRoyaltySplits", []byte(splits), nil, ownerAddress, "", true, gas, "")
+
+	// Three plates, ten prints each.
+	for _, plate := range []string{"printdawn", "printdusk", "printnoon"} {
+		MintNft(t, ct, seller, plate, 10, 10)
+	}
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, buyer, 500000)
+
+	entries := bucketPoolEntriesJSON([][3]string{
+		{"printdawn", "10", "0"},
+		{"printdusk", "10", "0"},
+		{"printnoon", "10", "0"},
+	})
+	// One print 5000; a portfolio of five 20000 — cheaper than five singles.
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"5000","pricePerPack":"20000","packDraws":[5],"expirationBlock":0}`,
+		NftContractID, entries, TokenID)
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
+	rcLog(t, "artdrop/seller: list bucket (3 entries, both modes)", res)
+	id := ParseCreated(res).Id
+
+	artistBefore := QueryTokenBalance(t, ct, "hive:artist")
+	galleryBefore := QueryTokenBalance(t, ct, "hive:gallery")
+	feeBefore := QueryTokenBalance(t, ct, feeRecipientAddress)
+	sellerBefore := QueryTokenBalance(t, ct, seller)
+
+	// A single print first.
+	single := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	singleRes, _, _ := CallMarket(t, ct, "buyFromBucket", []byte(single), nil, buyer, "", true, gas, "")
+	rcLog(t, "artdrop/buyer:  buy one print", singleRes)
+
+	// 5000: 125 fee, 250 artist, 125 gallery, 4500 to the seller.
+	assert.Equal(t, feeBefore+125, QueryTokenBalance(t, ct, feeRecipientAddress), "market fee on a single print")
+	assert.Equal(t, artistBefore+250, QueryTokenBalance(t, ct, "hive:artist"), "artist royalty on a single print")
+	assert.Equal(t, galleryBefore+125, QueryTokenBalance(t, ct, "hive:gallery"), "gallery royalty on a single print")
+	assert.Equal(t, sellerBefore+4500, QueryTokenBalance(t, ct, seller), "seller nets the rest")
+
+	// Then the portfolio: five prints for the price of four.
+	portfolio := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
+	portRes, _, _ := CallMarket(t, ct, "buyFromBucket", []byte(portfolio), nil, buyer, "", true, gas, "")
+	rcLog(t, "artdrop/buyer:  buy a 5-print portfolio", portRes)
+
+	held := QueryNftBalance(t, ct, buyer, "printdawn") +
+		QueryNftBalance(t, ct, buyer, "printdusk") +
+		QueryNftBalance(t, ct, buyer, "printnoon")
+	assert.Equal(t, uint64(6), held, "one single print plus a portfolio of five")
+
+	// 20000 portfolio: 500 fee, 1000 artist, 500 gallery — the split scales
+	// with the sale, and a portfolio pays it ONCE rather than per print.
+	assert.Equal(t, artistBefore+250+1000, QueryTokenBalance(t, ct, "hive:artist"), "artist royalty on the portfolio")
+	assert.Equal(t, galleryBefore+125+500, QueryTokenBalance(t, ct, "hive:gallery"), "gallery royalty on the portfolio")
+}
+
+// TestScenarioFlashDropWithDeadline — "24 hours only".
+//
+// A drop that closes on a deadline rather than when it sells out. Unsold stock
+// simply stays with the seller: expiry stops the sale, it does not burn or
+// forfeit anything, which is what makes a timed drop safe to run.
+func TestScenarioFlashDropWithDeadline(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	early := "hive:earlybird"
+	late := "hive:latecomer"
+
+	MintNft(t, ct, seller, "flashtee", 12, 12)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, early, 100000)
+	MintAndApproveToken(t, ct, late, 100000)
+
+	// The drop opens at block 100 and closes at 150.
+	ct.BlockHeight = 100
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":150}`,
+		NftContractID, bucketEntriesJSON([][2]string{{"flashtee", "12"}}), TokenID)
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
+	rcLog(t, "flash/seller:   list bucket (1 entry, expiring)", res)
+	id := ParseCreated(res).Id
+
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	for i := 0; i < 3; i++ {
+		buyRes, _, _ := CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, early, "", true, gas, "")
+		if i == 0 {
+			rcLog(t, "flash/buyer:    buy inside the window", buyRes)
+		}
+	}
+	assert.Equal(t, uint64(3), QueryNftBalance(t, ct, early, "flashtee"), "the early bird got three")
+
+	// The window closes.
+	ct.BlockHeight = 200
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, late, "", false, gas, "Bucket has expired")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, late, "flashtee"), "too late is too late")
+
+	// Nine unsold shirts are still the seller's — expiry closes the sale, it
+	// does not confiscate stock.
+	assert.Equal(t, uint64(9), QueryNftBalance(t, ct, seller, "flashtee"), "unsold stock stays home")
+}
+
+// TestScenarioLootCrateBoughtInBulkAndRestocked — "buy three, and the shop
+// tops up".
+//
+// Two things no other scenario shows: buying SEVERAL packs in one transaction,
+// and a seller restocking a drop that is already live. Together they are the
+// shape of a running shop rather than a one-off drop — stock goes out in
+// batches and comes back in between them.
+func TestScenarioLootCrateBoughtInBulkAndRestocked(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	whale := "hive:whale"
+	regular := "hive:regular"
+	// The seller mints twice, lists, then mints again and restocks mid-sale;
+	// the whale takes twelve draws in one transaction. Both exceed the free tier.
+	FundRc(t, ct, seller, 2_000_000)
+	FundRc(t, ct, whale, 2_000_000)
+
+	// Enough for exactly three crates, then a restock for one more.
+	MintNft(t, ct, seller, "cratecommon", 16, 16)
+	MintNft(t, ct, seller, "crategold", 4, 4)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, whale, 200000)
+	MintAndApproveToken(t, ct, regular, 200000)
+
+	// A crate is 3 commons and 1 guaranteed gold.
+	// 16 commons, deliberately more than the three crates need: after the bulk
+	// buy the bucket still holds plenty of commons but NO gold, so the refusal
+	// below is about the empty pool rather than the bucket simply being short.
+	entries := bucketPoolEntriesJSON([][3]string{
+		{"cratecommon", "16", "0"},
+		{"crategold", "3", "1"},
+	})
+	payload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"4000","packDraws":[3,1],"expirationBlock":0}`,
+		NftContractID, entries, TokenID)
+	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
+	rcLog(t, "lootcrate/seller: list bucket (2 entries, 2 pools)", res)
+	id := ParseCreated(res).Id
+
+	// THREE crates in one transaction — twelve draws.
+	bulk := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":3,"maxTotalPrice":""}`, id)
+	bulkRes, _, _ := CallMarket(t, ct, "buyFromBucket", []byte(bulk), nil, whale, "", true, gas, "")
+	rcLog(t, "lootcrate/buyer:  buy 3 crates at once (12 draws)", bulkRes)
+
+	assert.Equal(t, uint64(9), QueryNftBalance(t, ct, whale, "cratecommon"), "three crates: nine commons")
+	assert.Equal(t, uint64(3), QueryNftBalance(t, ct, whale, "crategold"), "three crates: three guaranteed golds")
+
+	// The shop is now out of gold, so the next crate cannot be filled.
+	single := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
+	CallMarket(t, ct, "buyFromBucket", []byte(single), nil, regular, "", false, gas,
+		"Not enough units left in a required pool")
+
+	// The seller tops up a LIVE bucket, mid-sale. Restocking is append-only —
+	// a token id already in the bucket cannot be added again — so a top-up
+	// brings NEW ids, which is what a real shop does anyway: next week's stock
+	// is next week's cards.
+	MintNft(t, ct, seller, "cratecommon2", 4, 4)
+	MintNft(t, ct, seller, "crategold2", 1, 1)
+	restock := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id,
+		bucketPoolEntriesJSON([][3]string{{"cratecommon2", "4", "0"}, {"crategold2", "1", "1"}}))
+	restockRes, _, _ := CallMarket(t, ct, "addToBucket", []byte(restock), nil, seller, "", true, gas, "")
+	rcLog(t, "lootcrate/seller: restock a live bucket", restockRes)
+
+	// The same purchase now goes through, and the guarantee still holds on the
+	// restocked stock.
+	regularRes, _, _ := CallMarket(t, ct, "buyFromBucket", []byte(single), nil, regular, "", true, gas, "")
+	rcLog(t, "lootcrate/buyer:  buy 1 crate after restock", regularRes)
+
+	commons := QueryNftBalance(t, ct, regular, "cratecommon") + QueryNftBalance(t, ct, regular, "cratecommon2")
+	golds := QueryNftBalance(t, ct, regular, "crategold") + QueryNftBalance(t, ct, regular, "crategold2")
+	assert.Equal(t, uint64(3), commons, "a crate is three commons")
+	assert.Equal(t, uint64(1), golds, "and one guaranteed gold, restocked stock included")
+}
