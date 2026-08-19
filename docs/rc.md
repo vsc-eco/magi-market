@@ -22,16 +22,36 @@ Minting is **not** a bucket cost — you pay it to create the cards whatever you
 do with them afterwards. Split that way, the bucket's own cost is the "market"
 column:
 
-| product | inventory | NFT side<br>(mint + approve) | market side<br>(list + stock) | total | buyer<br>per sale |
-|---|---|---:|---:|---:|---:|
-| Pokémon booster box | 2 designs, 30 cards | 1,076 | **2,271** | 3,347 | ~3,000 |
-| Raffle | 2 designs, 41 cards | 1,049 | **2,123** | 3,172 | ~4,000 |
-| Four-tier mystery | 4 designs, 38 cards | 1,914 | **3,152** | 5,066 | ~4,470 |
-| 52-card deck | 52 designs, 52 cards | 12,440 | **9,818** | 22,258 | ~8,000 |
-| Gachapon machine | 3 designs, 121 capsules | 1,534 | **2,521** | 4,055 | ~1,961 |
-| Art print drop | 3 designs, 30 prints | 1,453 | **4,425** | 5,878 | 2,418 / 3,665 |
-| Flash drop | 1 design, 12 shirts | 586 | **1,710** | 2,296 | ~1,945 |
-| Loot crate shop | 4 designs, 24 items | 1,930 | **3,386** | 5,316 | ~4,453 |
+### What each product sells
+
+| product | designs | cards<br>in bucket | one sale = | sales<br>available |
+|---|---:|---:|---|---:|
+| Pokémon booster box | 2 | 30 | pack of **5** (4 common + 1 rare) | 6 |
+| Raffle | 2 | 41 | strip of **10** tickets | 4 |
+| Four-tier mystery | 4 | 38 | pack of **10** (5/3/1/1) | 2 |
+| 52-card deck | 52 | 52 | hand of **13** cards | 4 |
+| Gachapon machine | 3 | 121 | **1** capsule | 121 |
+| Art print drop | 3 | 30 | **1** print, or portfolio of **5** | 30 singles / 6 portfolios |
+| Flash drop | 1 | 12 | **1** shirt | 12 (or until the deadline) |
+| Loot crate shop | 2 (+2 restocked) | 19 (+5) | crate of **4** (3 common + 1 gold) | 3, then 1 more |
+
+### What each product costs
+
+| product | NFT side<br>(mint + approve) | market side<br>(list + stock) | total<br>to launch | buyer<br>per sale | **RC per item** |
+|---|---:|---:|---:|---:|---:|
+| Pokémon booster box | 1,076 | **2,271** | 3,347 | ~3,000 | 600 |
+| Raffle | 1,049 | **2,123** | 3,172 | ~4,000 | 400 |
+| Four-tier mystery | 1,914 | **3,152** | 5,066 | ~4,470 | 447 |
+| 52-card deck | 12,440 | **9,818** | 22,258 | ~8,000 | 615 |
+| Gachapon machine | 1,534 | **2,521** | 4,055 | ~1,961 | **1,961** |
+| Art print drop | 1,453 | **4,425** | 5,878 | 2,418 / 3,665 | 2,418 / **733** |
+| Flash drop | 586 | **1,710** | 2,296 | ~1,945 | **1,945** |
+| Loot crate shop | 1,930 | **3,386** | 5,316 | 4,453 (3 crates) | **371** |
+
+The last column is the one to read for buyer experience. **Selling one item at a
+time costs the buyer 3–5× more RC per item than selling them in packs** — 1,961
+per capsule and 1,945 per shirt, against 371–615 per item inside a pack. That is
+the fixed ~1,840 payment cost being paid per sale instead of per item.
 
 For the small products the market side dominates. For the deck it flips:
 **minting 52 distinct designs costs more than the bucket does** (12,440 vs
@@ -42,7 +62,7 @@ For the small products the market side dominates. For the deck it flips:
 ## Pokémon booster box
 
 **Inventory:** 2 designs, 30 cards — `common` ×24 in pool 0, `rare` ×6 in pool 1
-**Sold as:** packs of 5, `packDraws [4,1]` — 4 commons + 1 guaranteed rare
+**Sold as:** packs of 5, `packDraws [4,1]` — 4 commons + 1 guaranteed rare. **5 cards per sale**
 **Supports:** 6 packs (limited by the 6 rares, one per pack)
 
 | who | contract | operation | RC |
@@ -62,7 +82,7 @@ Setup amortises to ~558 RC per pack across the six it supports.
 ## Raffle — one grand prize
 
 **Inventory:** 2 designs, 41 cards — `grandprize` ×1 and `consolation` ×40, both pool 0
-**Sold as:** ten-ticket strips, `packDraws [10]`
+**Sold as:** ten-ticket strips, `packDraws [10]`. **10 tickets per sale**
 **Supports:** 4 strips
 
 | who | contract | operation | RC |
@@ -83,7 +103,7 @@ ticket and cannot be won twice.
 ## Playing-card deck — 52 unique 1-of-1s
 
 **Inventory:** 52 designs, 52 cards — every card a 1-of-1, all in pool 0
-**Sold as:** 13-card hands, `packDraws [13]`
+**Sold as:** 13-card hands, `packDraws [13]`. **13 cards per sale**
 **Supports:** 4 hands (the whole deck)
 
 | who | contract | operation | RC |
@@ -114,7 +134,7 @@ splitting.
 
 **Inventory:** 4 designs, 38 cards — `common` ×20 (pool 0), `uncommon` ×12
 (pool 1), `holo` ×4 (pool 2), `secret` ×2 (pool 3)
-**Sold as:** packs of 10, `packDraws [5,3,1,1]` — one slot per tier
+**Sold as:** packs of 10, `packDraws [5,3,1,1]` — one slot per tier. **10 cards per sale**
 **Supports:** 2 packs (limited by the 2 secrets)
 
 | who | contract | operation | RC |
@@ -136,7 +156,8 @@ Four pools cost ~880 RC more to list than two, and ~1,470 more per pack than a
 
 **Inventory:** 3 designs, 121 capsules — `common` ×100, `rare` ×20, `chase` ×1,
 all in pool 0
-**Sold as:** single pulls only — no packs, no pools
+**Sold as:** single pulls only — no packs, no pools. **1 capsule per sale**
+**Supports:** 121 pulls (one per capsule)
 **Odds:** by unit weight. The chase is 1-in-121 per pull and nothing promises it
 
 | who | contract | operation | RC |
@@ -159,7 +180,8 @@ of that. Per-pull pricing is a product decision that buyers pay for in RC.
 
 **Inventory:** 3 plates, 30 prints — `dawn`/`dusk`/`noon` ×10 each, pool 0
 **Sold as:** BOTH modes — one print for 5,000, or a 5-print portfolio for
-20,000 (the price of four)
+20,000 (the price of four). **1 or 5 prints per sale**
+**Supports:** 30 single prints, or 6 portfolios, or any mix
 **Royalties:** 5% artist, 2.5% gallery, on top of the 2.5% market fee
 
 | who | contract | operation | RC |
@@ -187,7 +209,8 @@ portfolio is better value for the buyer twice over: cheaper per print, and
 ## Flash drop with a deadline
 
 **Inventory:** 1 design, 12 shirts, pool 0
-**Sold as:** single draws, `expirationBlock` 50 blocks out
+**Sold as:** single draws, `expirationBlock` 50 blocks out. **1 shirt per sale**
+**Supports:** 12 shirts, or however many sell before the deadline
 **Closes:** on the deadline, not on selling out
 
 | who | contract | operation | RC |
@@ -209,7 +232,9 @@ makes a timed drop safe to run.
 
 **Inventory:** 2 designs, 19 items to start — `common` ×16 (pool 0), `gold` ×3
 (pool 1); later restocked with 2 more designs, 5 more items
-**Sold as:** crates of 4, `packDraws [3,1]` — 3 commons + 1 guaranteed gold
+**Sold as:** crates of 4, `packDraws [3,1]` — 3 commons + 1 guaranteed gold.
+**4 items per sale**
+**Supports:** 3 crates (limited by the 3 golds), then 1 more after the restock
 **Shows:** buying several crates in ONE transaction, and topping up mid-sale
 
 | who | contract | operation | RC |
@@ -238,11 +263,11 @@ is what a real shop does anyway.
 
 | inventory | contract | operation | RC |
 |---|---|---|---:|
-| 500 designs × 1 card, 1 pool | nft | mint 500 ids, 25 `mintBatch` calls | ~135,000 |
+| **500 designs, 500 cards** (1 pool)<br>1 card or 10 per sale → 500 or 50 sales | nft | mint 500 ids, 25 `mintBatch` calls | ~135,000 |
 | | market | stocking, 21 calls | ~128,000 |
 | | market | one single draw | 2,738 |
 | | market | one 10-card pack | 9,001 |
-| 2 designs / 500 cards (450 + 50), 2 pools | nft | mint 2 designs | ~900 |
+| **2 designs, 500 cards** (450 + 50, 2 pools)<br>10 per sale → 50 sales | nft | mint 2 designs | ~900 |
 | | market | `listBucket`, 1 call | 2,152 |
 | | market | one 10-card pack | 3,916 |
 
