@@ -1144,6 +1144,7 @@ func TestBucketAddToBucketStocksMore(t *testing.T) {
 	// class, and the draw must see the whole bucket, not just the first batch.
 	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
 	for i := 0; i < 4; i++ {
+		fmt.Printf(">>>RC buy%d buyer=%d seller=%d\n", i+2, ct.GetAvailableRCs(buyer), ct.GetAvailableRCs(seller))
 		CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
 	}
 	for _, tid := range []string{"r1", "r2", "r3", "r4"} {
@@ -1340,4 +1341,190 @@ func TestBucketRejectsOverfullBucket(t *testing.T) {
 	over := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id,
 		bucketEntriesJSON([][2]string{{ids[MaxBucketEntriesContract], "1"}}))
 	CallMarket(t, ct, "addToBucket", []byte(over), nil, seller, "", false, gas, "Bucket is full")
+}
+
+// ===================================
+// Chunked-layout regressions
+// ===================================
+//
+// Both of these exist because entries moved from one flat array into per-pool
+// slot arrays with chunked unit sums. That change is invisible to every test
+// written before it: a small bucket is one chunk, and a bucket that is only
+// ever stocked before it is drawn from never exercises appending onto partially
+// drained state. Neither path fails loudly if the bookkeeping drifts — the
+// symptom is wrong odds or a unit that cannot be delivered.
+
+// TestBucketRestockAfterDraws appends to a bucket that has ALREADY been drawn
+// from.
+//
+// Every other addToBucket test stocks before anyone buys. Here the first two
+// draws zero out two slots WITHOUT removing them, so the append has to land at
+// the next free index and credit the right chunk sum on top of state that a
+// purchase has already decremented. If slot indices or chunk sums drift, the
+// restocked cards either never come out or come out twice.
+func TestBucketRestockAfterDraws(t *testing.T) {
+	ct := SetupContractTest()
+	InitFullSetup(t, ct)
+
+	seller := ownerAddress
+	// Two buyers, because RC is a PER-ACCOUNT budget and six draws from one
+	// account would exhaust the 10k free tier and fail for a reason that has
+	// nothing to do with restocking.
+	early := "hive:restockearly"
+	late := "hive:restocklate"
+
+	first := []string{"ra", "rb", "rc"}
+	second := []string{"rd", "re", "rf"}
+	MintNftBatch(t, ct, seller, append(append([]string{}, first...), second...), 1, 1)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, early, 100000)
+	MintAndApproveToken(t, ct, late, 100000)
+
+	entries := make([][2]string, 0, 3)
+	for _, id := range first {
+		entries = append(entries, [2]string{id, "1"})
+	}
+	id := listBucket(t, ct, seller, bucketEntriesJSON(entries), "1000", "0", "[]")
+
+	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
+	for i := 0; i < 2; i++ {
+		CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, early, "", true, gas, "")
+	}
+
+	// Restock ON TOP of the two drained slots.
+	more := make([][2]string, 0, 3)
+	for _, tid := range second {
+		more = append(more, [2]string{tid, "1"})
+	}
+	add := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id, bucketEntriesJSON(more))
+	CallMarket(t, ct, "addToBucket", []byte(add), nil, seller, "", true, gas, "")
+
+	// One unit survives from the original batch plus three new ones.
+	for i := 0; i < 4; i++ {
+		CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, late, "", true, gas, "")
+	}
+
+	// Every card reaches a buyer exactly once, and the seller keeps none. A
+	// drifted slot index would deliver one twice and strand another.
+	for _, tid := range append(append([]string{}, first...), second...) {
+		held := QueryNftBalance(t, ct, early, tid) + QueryNftBalance(t, ct, late, tid)
+		assert.Equal(t, uint64(1), held, "exactly one %s should have been delivered", tid)
+		assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, tid),
+			"seller should have handed over %s", tid)
+	}
+
+	// Drained, so the bucket closes — the restock did not corrupt the count.
+	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, late, "", false, gas, "Bucket not active")
+}
+
+// TestBucketPrunesStaleEntryInLaterChunk puts the stale entry BEYOND the first
+// chunk.
+//
+// Pruning decrements `chunks[pool][idx/BucketChunk]`. Every stale-entry test so
+// far used a handful of entries, so that division always yielded chunk 0 and the
+// indexing was never actually exercised. Here the stale entry sits at index 34 —
+// chunk 1 — and carries almost all the bucket's weight, so the draw is
+// overwhelmingly likely to select it and be forced to prune.
+//
+// The second round of draws is the real assertion: if pruning had decremented
+// the wrong chunk's sum, the totals would still look right (they are kept
+// separately) while the chunk sums silently disagreed with the slots, and later
+// draws would misbehave.
+func TestBucketPrunesStaleEntryInLaterChunk(t *testing.T) {
+	ct := SetupContractTest()
+
+	seller := ownerAddress
+	// The seller alone spends ~27k RC here (batch mints, a 24-entry listing, a
+	// 12-entry restock), far past the 10k free tier. ONE deposit, placed before
+	// any call: several deposits at the same block height do not all land, and
+	// the buyers below stay inside the free tier on purpose.
+	FundRc(ct, seller, 5_000_000)
+
+	InitFullSetup(t, ct)
+
+	// One buyer per pack: RC is per-account, and two packs over a 36-entry
+	// bucket would exhaust the free tier.
+	firstBuyer := "hive:chunkbuyer1"
+	secondBuyer := "hive:chunkbuyer2"
+
+	// 24 in the listing (the per-call cap) then 12 more, so the bucket spans
+	// two chunks of 32 slots.
+	firstBatch := make([]string, 0, 24)
+	for i := 0; i < 24; i++ {
+		firstBatch = append(firstBatch, fmt.Sprintf("ck%02d", i))
+	}
+	secondBatch := make([]string, 0, 11)
+	for i := 24; i < 36; i++ {
+		if i == 34 {
+			continue // index 34 is the stale entry, minted separately
+		}
+		secondBatch = append(secondBatch, fmt.Sprintf("ck%02d", i))
+	}
+	const stale = "ck34"
+
+	MintNftBatch(t, ct, seller, firstBatch, 1, 1)
+	MintNftBatch(t, ct, seller, secondBatch, 1, 1)
+	// Dominant weight, so a draw almost certainly lands on it.
+	MintNft(t, ct, seller, stale, 500, 500)
+	ApproveNftForMarket(t, ct, seller)
+	MintAndApproveToken(t, ct, firstBuyer, 100000)
+	MintAndApproveToken(t, ct, secondBuyer, 100000)
+
+	listed := make([][2]string, 0, 24)
+	for _, tid := range firstBatch {
+		listed = append(listed, [2]string{tid, "1"})
+	}
+	// bigGas for the bulk calls: maxGas here is an assertion AFTER the call, not
+	// an execution limit, and a 24-entry listing legitimately exceeds the
+	// default one.
+	listPayload := fmt.Sprintf(
+		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"5000","packDraws":[5],"expirationBlock":0}`,
+		NftContractID, bucketEntriesJSON(listed), TokenID)
+	listRes, _, _ := CallMarket(t, ct, "listBucket", []byte(listPayload), nil, seller, "", true, bigGas, "")
+	id := ParseCreated(listRes).Id
+
+	// Append so the stale entry lands at slot 34 — chunk 1, not chunk 0.
+	rest := make([][2]string, 0, 12)
+	for i := 24; i < 36; i++ {
+		if i == 34 {
+			rest = append(rest, [2]string{stale, "500"})
+			continue
+		}
+		rest = append(rest, [2]string{fmt.Sprintf("ck%02d", i), "1"})
+	}
+	add := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id, bucketEntriesJSON(rest))
+	CallMarket(t, ct, "addToBucket", []byte(add), nil, seller, "", true, bigGas, "")
+
+	// The seller moves the whole dominant entry away AFTER listing.
+	away := fmt.Sprintf(`{"from":"%s","to":"hive:elsewhere","id":"%s","amount":500,"data":""}`, seller, stale)
+	CallNft(t, ct, "safeTransferFrom", []byte(away), nil, seller, true, gas, "")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, stale), "seller no longer holds it")
+
+	pack := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
+	_, _, logs := CallMarket(t, ct, "buyFromBucket", []byte(pack), nil, firstBuyer, "", true, bigGas, "")
+
+	// It was pruned rather than silently skipped, and never delivered.
+	AssertEventEmitted(t, logs, "bucket_entry_dropped")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, firstBuyer, stale),
+		"a unit the seller no longer holds must never be delivered")
+
+	delivered := uint64(0)
+	for i := 0; i < 36; i++ {
+		delivered += QueryNftBalance(t, ct, firstBuyer, fmt.Sprintf("ck%02d", i))
+	}
+	assert.Equal(t, uint64(5), delivered, "a [5] pack delivers five cards")
+
+	// The chunk sums must still agree with the slots after a prune in chunk 1.
+	// A wrong-chunk decrement leaves the totals plausible and the chunk sums
+	// corrupt, which only shows up on the NEXT draw.
+	_, _, logs2 := CallMarket(t, ct, "buyFromBucket", []byte(pack), nil, secondBuyer, "", true, bigGas, "")
+	assert.Empty(t, FindEventsInLogs(logs2, "bucket_entry_dropped"),
+		"nothing else was stale — a second drop means the prune corrupted the table")
+
+	delivered2 := uint64(0)
+	for i := 0; i < 36; i++ {
+		delivered2 += QueryNftBalance(t, ct, secondBuyer, fmt.Sprintf("ck%02d", i))
+	}
+	assert.Equal(t, uint64(5), delivered2, "the bucket keeps drawing correctly after the prune")
+	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, secondBuyer, stale), "still never delivered")
 }
