@@ -1264,8 +1264,8 @@ func TestBucketFiveHundredDistinctCards(t *testing.T) {
 
 	// The seller mints 500 NFTs and makes eight stocking calls here; without
 	// funding, the 10k free tier is gone long before the bucket is built.
-	FundRc(ct, seller, 5_000_000)
-	FundRc(ct, buyer, 5_000_000)
+	FundRc(t, ct, seller, 5_000_000)
+	FundRc(t, ct, buyer, 5_000_000)
 
 	const total = 500
 	ids := make([]string, 0, total)
@@ -1327,7 +1327,7 @@ func TestBucketRejectsOverfullBucket(t *testing.T) {
 	InitFullSetup(t, ct)
 	seller := ownerAddress
 
-	FundRc(ct, seller, 5_000_000)
+	FundRc(t, ct, seller, 5_000_000)
 
 	// Fill to the cap, then try to add one more.
 	ids := make([]string, 0, MaxBucketEntriesContract+1)
@@ -1369,7 +1369,8 @@ func TestBucketRestockAfterDraws(t *testing.T) {
 	seller := ownerAddress
 	// Two buyers, because RC is a PER-ACCOUNT budget and six draws from one
 	// account would exhaust the 10k free tier and fail for a reason that has
-	// nothing to do with restocking.
+	// nothing to do with restocking. Two collectors is also the more realistic
+	// shape: a restocked bucket is normally drawn from by whoever shows up next.
 	early := "hive:restockearly"
 	late := "hive:restocklate"
 
@@ -1435,10 +1436,9 @@ func TestBucketPrunesStaleEntryInLaterChunk(t *testing.T) {
 
 	seller := ownerAddress
 	// The seller alone spends ~27k RC here (batch mints, a 24-entry listing, a
-	// 12-entry restock), far past the 10k free tier. ONE deposit, placed before
-	// any call: several deposits at the same block height do not all land, and
-	// the buyers below stay inside the free tier on purpose.
-	FundRc(ct, seller, 5_000_000)
+	// 12-entry restock), far past the 10k free tier. The buyers below each stay
+	// inside the free tier, so only the seller needs topping up.
+	FundRc(t, ct, seller, 5_000_000)
 
 	InitFullSetup(t, ct)
 
@@ -1551,7 +1551,7 @@ func TestBucketMaxStaleRetriesBoundsPruning(t *testing.T) {
 
 	seller := ownerAddress
 	// The seller mints 20 ids, lists them and then moves every one away.
-	FundRc(ct, seller, 5_000_000)
+	FundRc(t, ct, seller, 5_000_000)
 
 	InitFullSetup(t, ct)
 

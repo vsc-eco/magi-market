@@ -2,6 +2,7 @@ package contract_test
 
 import (
 	"embed"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -333,17 +334,27 @@ func MintNft(t *testing.T, ct *test_utils.ContractTest, to, tokenId string, amou
 // FundRc raises an account's RC budget for the rest of the test.
 //
 // RC is not per call. The harness accumulates consumption per ACCOUNT across
-// the whole test (ct.RcSession), and an account's budget is its HBD ledger
-// balance plus the 10k free tier — so a test that mints, approves and lists
-// from one account silently spends the same 10k on setup that it wants to
-// measure with. That is what made earlier bucket measurements unreadable: a
-// listing "too expensive at ten entries" was really a seller who had already
-// spent their allowance on ten mints.
+// the whole test, and an account's budget is its HBD ledger balance plus a 10k
+// free tier — so a test that mints, approves and lists from one account
+// silently spends the same 10k it wanted to measure with.
 //
-// Depositing HBD raises the budget, which lets a test build a large fixture and
-// still measure the call it cares about against a realistic per-call rcLimit.
-func FundRc(ct *test_utils.ContractTest, account string, amount int64) {
+// The deposit target must be a REAL Hive account name: the ledger checks it
+// against Hive's rules and a length limit (the full "hive:name" under 17
+// characters), and on a mismatch it quietly credits hive:contract-test-account
+// instead — leaving the intended account on the free tier while this call
+// appears to succeed. That silence cost a long debugging detour, so the credit
+// is verified here rather than assumed.
+func FundRc(t *testing.T, ct *test_utils.ContractTest, account string, amount int64) {
+	t.Helper()
+	before := ct.GetAvailableRCs(account)
 	ct.Deposit(account, amount, ledgerDb.AssetHbd)
+	after := ct.GetAvailableRCs(account)
+	if after <= before {
+		t.Fatalf("FundRc(%q) credited nothing (rc %d -> %d). The ledger redirects "+
+			"deposits whose target is not a valid Hive account — the full %q must be "+
+			"lowercase, alphanumeric and under 17 characters (it is %d).",
+			account, before, after, account, len(account))
+	}
 }
 
 // MintNftBatch mints many token ids, splitting them across as many calls as the
@@ -551,6 +562,28 @@ func QueryTokenBalance(t *testing.T, ct *test_utils.ContractTest, account string
 }
 
 // QueryNftBalance queries balanceOf on the NFT contract.
+// NftBalanceState reads a holder's balance straight from the NFT contract's
+// state instead of calling balanceOf.
+//
+// Every QueryNftBalance is a contract call billed to one shared account on the
+// 10k free tier, so a test with a few hundred assertions exhausts it and starts
+// failing on the ASSERTIONS rather than on anything it meant to test. A state
+// read costs nothing. Use it where the assertion count is large; prefer the
+// contract call where the read itself is part of what is under test.
+//
+// magi_nft stores balances as raw little-endian bytes — a balance of 4 is the
+// single byte 0x04, not "4" — which is what the market's decodeNftU64 expects.
+func NftBalanceState(ct *test_utils.ContractTest, account, tokenId string) uint64 {
+	raw := ct.StateGet(NftContractID, "bal|"+account+"|"+tokenId)
+	b := []byte(raw)
+	if len(b) == 0 || len(b) > 8 {
+		return 0
+	}
+	var buf [8]byte
+	copy(buf[:], b)
+	return binary.LittleEndian.Uint64(buf[:])
+}
+
 func QueryNftBalance(t *testing.T, ct *test_utils.ContractTest, account, tokenId string) uint64 {
 	result, _, _ := CallNft(t, ct, "balanceOf",
 		[]byte(fmt.Sprintf(`{"account":"%s","id":"%s"}`, account, tokenId)), nil, "hive:anyone", true, gas, "")
