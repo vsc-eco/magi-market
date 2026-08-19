@@ -1,11 +1,11 @@
 # Bucket RC costs
 
-Measured numbers for what bucket sales actually cost, by scenario.
+What bucket sales actually cost, per scenario, with the inventory that produced
+each number.
 
-Every figure here comes from a test run against the real `magi_nft` and
-`magi_token` contracts, at the **default `rcLimit` of 10000** that the SDK
-sends — so "fits" below means a real user can afford it, not merely that the
-contract is correct.
+Every figure comes from a test run against the real `magi_nft` and `magi_token`
+contracts at the **default `rcLimit` of 10000** the SDK sends — so "fits" below
+means a real user can afford it, not merely that the contract is correct.
 
 Regenerate after any change that could move them:
 
@@ -14,59 +14,120 @@ make test                                   # rebuild wasm first, or you measure
 go test ./test/ -run TestScenario -v | grep RCCOST
 ```
 
-The scenario tests emit their own costs, so this file is derived from a run
-rather than hand-maintained.
+---
 
-## What a buyer pays
+## Pokémon booster box
 
-| scenario | purchase | cards | RC | per card |
-|---|---|---:|---:|---:|
-| Pokémon booster | pack `[4,1]` — 4 commons + 1 guaranteed rare | 5 | **~3,000** | 600 |
-| Raffle | strip `[10]` — 1 jackpot among 40 blanks | 10 | **~4,000** | 400 |
-| Four-tier mystery | pack `[5,3,1,1]` across 4 pools | 10 | **~4,470** | 447 |
-| Playing-card deck | hand `[13]` from 52 unique entries | 13 | **~8,000** | 615 |
-| Big bucket, single draw | 1 draw from 500 unique entries | 1 | **2,738** | 2,738 |
-| Big bucket, pack | pack `[10]` from 500 unique entries | 10 | **9,001** | 900 |
-| Editions, pack | pack `[10]` from 2 entries / 500 units | 10 | **3,916** | 392 |
+**Inventory:** 2 designs, 30 cards — `common` ×24 in pool 0, `rare` ×6 in pool 1
+**Sold as:** packs of 5, `packDraws [4,1]` — 4 commons + 1 guaranteed rare
+**Supports:** 6 packs (limited by the 6 rares, one per pack)
 
-Spread across repeat runs: Pokémon 2,987–3,033; raffle 3,978–4,221; four-tier
-4,453–4,485; deck 7,580–8,436. The variation is the draw landing on different
-entries, not noise.
-
-**Everything fits inside one transaction.** The tightest is a 13-card hand over
-52 entries at ~8,400, using 84% of the budget. Above roughly that size, split
-the purchase.
-
-## What a seller pays
-
-| scenario | operation | RC |
+| who | operation | RC |
 |---|---|---:|
-| Pokémon booster | list bucket (2 entries, 2 pools) | 2,271 |
-| Raffle | list bucket (2 entries, 41 units) | 2,123 |
-| Four-tier mystery | list bucket (4 entries, 4 pools) | 3,152 |
-| Playing-card deck | `listBucket` (first 24 entries) | 4,831 |
-| | `addToBucket` (next 24) | 3,975 |
-| | `addToBucket` (final 4) | 1,012 |
-| | **stocking total, 52 entries** | **9,818** |
-| Big bucket | stocking 500 unique entries, 21 calls | ~128,000 |
+| seller | mint 2 designs (24 + 6 copies) | 910 |
+| seller | `setApprovalForAll` | 166 |
+| seller | `listBucket` — 2 entries, 2 pools | 2,271 |
+| seller | **total to launch** | **3,347** |
+| buyer | open one pack (5 cards) | **2,937 – 3,033** |
 
-Minting is separate and is the NFT contract's bill, not the market's:
+Setup amortises to ~558 RC per pack across the six it supports.
 
-| minting | RC |
+---
+
+## Raffle — one grand prize
+
+**Inventory:** 2 designs, 41 cards — `grandprize` ×1 and `consolation` ×40, both pool 0
+**Sold as:** ten-ticket strips, `packDraws [10]`
+**Supports:** 4 strips
+
+| who | operation | RC |
+|---|---|---:|
+| seller | mint 2 designs (1 + 40 copies) | 883 |
+| seller | `setApprovalForAll` | 166 |
+| seller | `listBucket` — 2 entries, 1 pool | 2,123 |
+| seller | **total to launch** | **3,172** |
+| buyer | draw a 10-ticket strip | **3,978 – 4,221** |
+
+One pool, so the jackpot is not slot-guaranteed — it is simply 1-in-41 per
+ticket and cannot be won twice.
+
+---
+
+## Playing-card deck — 52 unique 1-of-1s
+
+**Inventory:** 52 designs, 52 cards — every card a 1-of-1, all in pool 0
+**Sold as:** 13-card hands, `packDraws [13]`
+**Supports:** 4 hands (the whole deck)
+
+| who | operation | RC |
+|---|---|---:|
+| seller | `mintBatch` ×3 (24 + 24 + 4 ids) | 12,274 |
+| seller | `setApprovalForAll` | 166 |
+| seller | `listBucket` — first 24 entries | 4,831 |
+| seller | `addToBucket` — next 24 | 3,975 |
+| seller | `addToBucket` — final 4 | 1,012 |
+| seller | **total to launch** | **22,258** |
+| buyer | deal a 13-card hand | **7,580 – 8,436** |
+
+**This is the expensive shape.** 52 distinct designs cost 12,274 RC to mint and
+9,818 to stock across three transactions — and launching it needs more than the
+10k free tier, so the seller must hold HBD in the VSC ledger.
+
+The 13-card hand at ~8,400 is the **most expensive purchase measured**, using
+84% of a transaction's budget. Larger hands over this many entries would need
+splitting.
+
+---
+
+## Four-tier mystery pack
+
+**Inventory:** 4 designs, 38 cards — `common` ×20 (pool 0), `uncommon` ×12
+(pool 1), `holo` ×4 (pool 2), `secret` ×2 (pool 3)
+**Sold as:** packs of 10, `packDraws [5,3,1,1]` — one slot per tier
+**Supports:** 2 packs (limited by the 2 secrets)
+
+| who | operation | RC |
+|---|---|---:|
+| seller | mint 4 designs (20 + 12 + 4 + 2 copies) | 1,748 |
+| seller | `setApprovalForAll` | 166 |
+| seller | `listBucket` — 4 entries, 4 pools | 3,152 |
+| seller | **total to launch** | **5,066** |
+| buyer | open one pack (10 cards) | **4,453 – 4,485** |
+
+Four pools cost ~880 RC more to list than two, and ~1,470 more per pack than a
+5-card two-pool pack. Tiered guarantees are affordable.
+
+---
+
+## Large buckets (measured separately)
+
+| inventory | operation | RC |
+|---|---|---:|
+| 500 designs × 1 card, 1 pool | stocking, 21 calls | ~128,000 |
+| | one single draw | 2,738 |
+| | one 10-card pack | 9,001 |
+| 2 designs / 500 cards (450 + 50), 2 pools | `listBucket`, 1 call | 2,152 |
+| | one 10-card pack | 3,916 |
+
+**Units are free; distinct designs cost.** The same 500 cards cost 2,152 RC to
+list as two editions and ~128,000 as 500 unique 1-of-1s — roughly 60× — and the
+packs cost buyers 2.3× more. Unique-per-card earns that only if each card must
+be individually tradeable and traceable.
+
+---
+
+## Reference costs
+
+| operation | RC |
 |---|---:|
-| `mintBatch`, 24 distinct ids | 4,694 (~196 per id) |
-| `mint`, one design × 100 copies | 388 |
-| `setApprovalForAll` (once per collection) | 166 |
+| `mint` — one design, any number of copies | ~420 – 465 |
+| `mintBatch` — 24 distinct ids | 4,694 (~196 per id) |
+| `setApprovalForAll` — once per collection | 166 |
+| payment-token `approve` — once per buyer | ~195 |
 
-## The number that decides your design
-
-**Units are free; distinct designs cost.** A bucket of 500 cards as *two
-editions* lists for 2,152 RC in one call. The same 500 cards as *500 unique
-1-of-1s* costs ~128,000 RC across 21 calls, and its packs cost buyers roughly
-2.3× more.
-
-Unique-per-card earns that only if each card must be individually tradeable and
-traceable. If the cards are interchangeable, use editions.
+One-time infrastructure, excluded from the launch totals above because it is
+paid once for a whole marketplace rather than per product: `paytoken` init 781,
+`nft` init 1,298, `market` init 1,032, `addPaymentToken` ~170 each.
 
 ## Planning rule of thumb
 
@@ -76,20 +137,23 @@ RC ≈ 1840 + 13 × draws × (entries/32 + min(entries, 32) + 8)
 
 The fixed ~1,840 is the payment machinery — pulling funds, paying fee, royalty
 and seller. **Every sale path in the contract pays it**, not just buckets, which
-is why packs are so much better value per card than repeated single draws: one
-fixed cost amortised across the whole pack.
+is why packs are far better value per card than repeated single draws: one fixed
+cost amortised across the whole pack.
 
-Treat the formula as a **conservative bound, not a predictor** — it runs 15–25%
-either side of measured values. `MaxDrawWork = 600` uses it deliberately in that
-spirit: to refuse an oversized purchase up front with a clear message, rather
-than let it die deep in execution with "cost limit exceeded".
+Treat it as a **conservative bound, not a predictor** — it runs 15–25% either
+side of measured values. `MaxDrawWork = 600` uses it in exactly that spirit: to
+refuse an oversized purchase up front with a clear message rather than let it
+die deep in execution with "cost limit exceeded".
 
 ## Caveats
 
 - Measured in the **in-process harness**. Devnet figures differ slightly (a
   10-card pack over 500 entries measured 9,113 there vs 9,001 here) because the
   fixture differs, not the contract.
-- Costs shift with how the seller authorised the market: these assume
-  `setApprovalForAll`. Per-token allowances add a state read per entry.
+- These assume the seller authorised with `setApprovalForAll`. Per-token
+  allowances add a state read per entry.
 - A seller who is **not** the collection owner pays one extra read per entry for
   the soulbound check.
+- RC is a **per-account** budget: an account's allowance is its VSC-ledger HBD
+  balance plus a 10k free tier. Launch totals above are what the seller spends
+  in aggregate, so anything past ~10k needs HBD on the ledger.
