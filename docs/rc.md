@@ -16,19 +16,40 @@ go test ./test/ -run TestScenario -v | grep RCCOST
 
 ---
 
+## At a glance
+
+Minting is **not** a bucket cost — you pay it to create the cards whatever you
+do with them afterwards. Split that way, the bucket's own cost is the "market"
+column:
+
+| product | inventory | NFT side<br>(mint + approve) | market side<br>(list + stock) | total | buyer<br>per sale |
+|---|---|---:|---:|---:|---:|
+| Pokémon booster box | 2 designs, 30 cards | 1,076 | **2,271** | 3,347 | ~3,000 |
+| Raffle | 2 designs, 41 cards | 1,049 | **2,123** | 3,172 | ~4,000 |
+| Four-tier mystery | 4 designs, 38 cards | 1,914 | **3,152** | 5,066 | ~4,470 |
+| 52-card deck | 52 designs, 52 cards | 12,440 | **9,818** | 22,258 | ~8,000 |
+
+For the three small products the market side dominates. For the deck it flips:
+**minting 52 distinct designs costs more than the bucket does** (12,440 vs
+9,818), and that is true before the bucket is involved at all.
+
+---
+
 ## Pokémon booster box
 
 **Inventory:** 2 designs, 30 cards — `common` ×24 in pool 0, `rare` ×6 in pool 1
 **Sold as:** packs of 5, `packDraws [4,1]` — 4 commons + 1 guaranteed rare
 **Supports:** 6 packs (limited by the 6 rares, one per pack)
 
-| who | operation | RC |
-|---|---|---:|
-| seller | mint 2 designs (24 + 6 copies) | 910 |
-| seller | `setApprovalForAll` | 166 |
-| seller | `listBucket` — 2 entries, 2 pools | 2,271 |
-| seller | **total to launch** | **3,347** |
-| buyer | open one pack (5 cards) | **2,937 – 3,033** |
+| who | contract | operation | RC |
+|---|---|---|---:|
+| seller | nft | mint 2 designs (24 + 6 copies) | 910 |
+| seller | nft | `setApprovalForAll` | 166 |
+| seller | | *NFT subtotal* | *1,076* |
+| seller | market | `listBucket` — 2 entries, 2 pools | 2,271 |
+| seller | | *market subtotal* | *2,271* |
+| seller | | **total to launch** | **3,347** |
+| buyer | market | open one pack (5 cards) | **2,937 – 3,033** |
 
 Setup amortises to ~558 RC per pack across the six it supports.
 
@@ -40,13 +61,15 @@ Setup amortises to ~558 RC per pack across the six it supports.
 **Sold as:** ten-ticket strips, `packDraws [10]`
 **Supports:** 4 strips
 
-| who | operation | RC |
-|---|---|---:|
-| seller | mint 2 designs (1 + 40 copies) | 883 |
-| seller | `setApprovalForAll` | 166 |
-| seller | `listBucket` — 2 entries, 1 pool | 2,123 |
-| seller | **total to launch** | **3,172** |
-| buyer | draw a 10-ticket strip | **3,978 – 4,221** |
+| who | contract | operation | RC |
+|---|---|---|---:|
+| seller | nft | mint 2 designs (1 + 40 copies) | 883 |
+| seller | nft | `setApprovalForAll` | 166 |
+| seller | | *NFT subtotal* | *1,049* |
+| seller | market | `listBucket` — 2 entries, 1 pool | 2,123 |
+| seller | | *market subtotal* | *2,123* |
+| seller | | **total to launch** | **3,172** |
+| buyer | market | draw a 10-ticket strip | **3,978 – 4,221** |
 
 One pool, so the jackpot is not slot-guaranteed — it is simply 1-in-41 per
 ticket and cannot be won twice.
@@ -59,19 +82,23 @@ ticket and cannot be won twice.
 **Sold as:** 13-card hands, `packDraws [13]`
 **Supports:** 4 hands (the whole deck)
 
-| who | operation | RC |
-|---|---|---:|
-| seller | `mintBatch` ×3 (24 + 24 + 4 ids) | 12,274 |
-| seller | `setApprovalForAll` | 166 |
-| seller | `listBucket` — first 24 entries | 4,831 |
-| seller | `addToBucket` — next 24 | 3,975 |
-| seller | `addToBucket` — final 4 | 1,012 |
-| seller | **total to launch** | **22,258** |
-| buyer | deal a 13-card hand | **7,580 – 8,436** |
+| who | contract | operation | RC |
+|---|---|---|---:|
+| seller | nft | `mintBatch` ×3 (24 + 24 + 4 ids) | 12,274 |
+| seller | nft | `setApprovalForAll` | 166 |
+| seller | | *NFT subtotal* | *12,440* |
+| seller | market | `listBucket` — first 24 entries | 4,831 |
+| seller | market | `addToBucket` — next 24 | 3,975 |
+| seller | market | `addToBucket` — final 4 | 1,012 |
+| seller | | *market subtotal* | *9,818* |
+| seller | | **total to launch** | **22,258** |
+| buyer | market | deal a 13-card hand | **7,580 – 8,436** |
 
-**This is the expensive shape.** 52 distinct designs cost 12,274 RC to mint and
-9,818 to stock across three transactions — and launching it needs more than the
-10k free tier, so the seller must hold HBD in the VSC ledger.
+**This is the expensive shape, and the minting is why.** 52 distinct designs
+cost 12,274 RC to mint — MORE than the 9,818 it costs to stock the bucket — and
+that half of the bill is owed whatever you do with the cards afterwards.
+Launching needs well past the 10k free tier, so the seller must hold HBD in the
+VSC ledger.
 
 The 13-card hand at ~8,400 is the **most expensive purchase measured**, using
 84% of a transaction's budget. Larger hands over this many entries would need
@@ -86,13 +113,15 @@ splitting.
 **Sold as:** packs of 10, `packDraws [5,3,1,1]` — one slot per tier
 **Supports:** 2 packs (limited by the 2 secrets)
 
-| who | operation | RC |
-|---|---|---:|
-| seller | mint 4 designs (20 + 12 + 4 + 2 copies) | 1,748 |
-| seller | `setApprovalForAll` | 166 |
-| seller | `listBucket` — 4 entries, 4 pools | 3,152 |
-| seller | **total to launch** | **5,066** |
-| buyer | open one pack (10 cards) | **4,453 – 4,485** |
+| who | contract | operation | RC |
+|---|---|---|---:|
+| seller | nft | mint 4 designs (20 + 12 + 4 + 2 copies) | 1,748 |
+| seller | nft | `setApprovalForAll` | 166 |
+| seller | | *NFT subtotal* | *1,914* |
+| seller | market | `listBucket` — 4 entries, 4 pools | 3,152 |
+| seller | | *market subtotal* | *3,152* |
+| seller | | **total to launch** | **5,066** |
+| buyer | market | open one pack (10 cards) | **4,453 – 4,485** |
 
 Four pools cost ~880 RC more to list than two, and ~1,470 more per pack than a
 5-card two-pool pack. Tiered guarantees are affordable.
@@ -101,17 +130,20 @@ Four pools cost ~880 RC more to list than two, and ~1,470 more per pack than a
 
 ## Large buckets (measured separately)
 
-| inventory | operation | RC |
-|---|---|---:|
-| 500 designs × 1 card, 1 pool | stocking, 21 calls | ~128,000 |
-| | one single draw | 2,738 |
-| | one 10-card pack | 9,001 |
-| 2 designs / 500 cards (450 + 50), 2 pools | `listBucket`, 1 call | 2,152 |
-| | one 10-card pack | 3,916 |
+| inventory | contract | operation | RC |
+|---|---|---|---:|
+| 500 designs × 1 card, 1 pool | nft | mint 500 ids, 25 `mintBatch` calls | ~135,000 |
+| | market | stocking, 21 calls | ~128,000 |
+| | market | one single draw | 2,738 |
+| | market | one 10-card pack | 9,001 |
+| 2 designs / 500 cards (450 + 50), 2 pools | nft | mint 2 designs | ~900 |
+| | market | `listBucket`, 1 call | 2,152 |
+| | market | one 10-card pack | 3,916 |
 
-**Units are free; distinct designs cost.** The same 500 cards cost 2,152 RC to
-list as two editions and ~128,000 as 500 unique 1-of-1s — roughly 60× — and the
-packs cost buyers 2.3× more. Unique-per-card earns that only if each card must
+**Units are free; distinct designs cost — on both sides.** The same 500 cards
+cost ~900 to mint and 2,152 to list as two editions, against ~135,000 to mint
+and ~128,000 to list as 500 unique 1-of-1s. That is ~3,000 RC all-in versus
+~263,000, near enough 90×, and the packs cost buyers 2.3× more on top. Unique-per-card earns that only if each card must
 be individually tradeable and traceable.
 
 ---
