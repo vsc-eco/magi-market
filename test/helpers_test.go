@@ -43,9 +43,9 @@ const FeeTokenID = "contract:feetoken"
 // mock has NO balanceOf entrypoint, proving the raw-read path is exercised.
 const UtxoMockID = "contract:utxomock"
 
-// DexMockID is the DEX pool mock's contract id. Used as paymentToken in F2
+// DexMockID is the DEX stack mock's contract id. Used as paymentToken in F2
 // tests so that escrowIn (which calls transferFrom on the paymentToken) works
-// against dexmock's ledger, and as the DEX pool address for swap calls.
+// against dexmock's ledger, and as the DEX stack address for swap calls.
 // The mock's a-<acct> BE-u64 storage is identical to utxomock so
 // magi-market's raw-read tokenBalanceOf works for balance-delta accounting.
 const DexMockID = "contract:dexmock"

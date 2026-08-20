@@ -210,7 +210,7 @@ func TestAuditListNativeDexRejected(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 
 	// settleToken != "" + paymentToken=hive should reject at list time.
-	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"hive","pricePerUnit":"100","settleToken":"%s","dexPool":"contract:somepool","minSettleOut":"50"}`, NftContractID, TokenID)
+	payload := fmt.Sprintf(`{"nftContract":"%s","tokenId":"1","amount":5,"paymentToken":"hive","pricePerUnit":"100","settleToken":"%s","dexStack":"contract:somestack","minSettleOut":"50"}`, NftContractID, TokenID)
 	CallMarket(t, ct, "list", []byte(payload), nil, seller, "", false, gas, "native paymentToken cannot use settleToken/dex payout")
 }
 

@@ -40,7 +40,7 @@ func TestScenarioPokemonBoosterBox(t *testing.T) {
 	MintNft(t, ct, seller, "boosterrare", 6, 6)
 	ApproveNftForMarket(t, ct, seller)
 
-	entries := bucketPoolEntriesJSON([][3]string{
+	entries := bucketStackEntriesJSON([][3]string{
 		{"boostercommon", "24", "0"},
 		{"boosterrare", "6", "1"},
 	})
@@ -48,7 +48,7 @@ func TestScenarioPokemonBoosterBox(t *testing.T) {
 		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"5000","packDraws":[4,1],"expirationBlock":0}`,
 		NftContractID, entries, TokenID)
 	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
-	rcLog(t, "pokemon/seller: list bucket (2 entries, 2 pools)", res)
+	rcLog(t, "pokemon/seller: list bucket (2 entries, 2 stacks)", res)
 	id := ParseCreated(res).Id
 
 	// Six packs across three collectors, two each.
@@ -90,7 +90,7 @@ func TestScenarioRaffleSingleGrandPrize(t *testing.T) {
 	MintNft(t, ct, seller, "consolation", 40, 40)
 	ApproveNftForMarket(t, ct, seller)
 
-	entries := bucketPoolEntriesJSON([][3]string{
+	entries := bucketStackEntriesJSON([][3]string{
 		{"grandprize", "1", "0"},
 		{"consolation", "40", "0"},
 	})
@@ -119,7 +119,7 @@ func TestScenarioRaffleSingleGrandPrize(t *testing.T) {
 		assert.LessOrEqual(t, won, uint64(1), "there is only one grand prize to win")
 	}
 
-	// Thirty tickets drawn from a pool holding exactly one jackpot.
+	// Thirty tickets drawn from a stack holding exactly one jackpot.
 	assert.LessOrEqual(t, jackpots, uint64(1), "the grand prize cannot be won twice")
 	assert.Equal(t, 1-int(jackpots), int(QueryNftBalance(t, ct, seller, "grandprize")),
 		"the jackpot is either won exactly once or still with the house")
@@ -182,9 +182,9 @@ func TestScenarioPlayingCardDeckDealtWithoutReplacement(t *testing.T) {
 // TestScenarioFourTierMysteryPack — "commons, uncommons, holo, and one secret".
 //
 // A four-tier pack, which is where slot guarantees earn their keep: each tier is
-// its own pool and each slot draws from exactly one of them, so the shape of a
+// its own stack and each slot draws from exactly one of them, so the shape of a
 // pack is fixed even though its contents are not. Nothing else in the suite uses
-// more than two pools.
+// more than two stacks.
 func TestScenarioFourTierMysteryPack(t *testing.T) {
 	ct := SetupContractTest()
 	seller := ownerAddress
@@ -197,7 +197,7 @@ func TestScenarioFourTierMysteryPack(t *testing.T) {
 	MintNft(t, ct, seller, "tiersecret", 2, 2)
 	ApproveNftForMarket(t, ct, seller)
 
-	entries := bucketPoolEntriesJSON([][3]string{
+	entries := bucketStackEntriesJSON([][3]string{
 		{"tiercommon", "20", "0"},
 		{"tieruncommon", "12", "1"},
 		{"tierholo", "4", "2"},
@@ -208,7 +208,7 @@ func TestScenarioFourTierMysteryPack(t *testing.T) {
 		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"7000","packDraws":[5,3,1,1],"expirationBlock":0}`,
 		NftContractID, entries, TokenID)
 	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
-	rcLog(t, "4tier/seller:   list bucket (4 entries, 4 pools)", res)
+	rcLog(t, "4tier/seller:   list bucket (4 entries, 4 stacks)", res)
 	id := ParseCreated(res).Id
 
 	pack := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
@@ -240,13 +240,13 @@ func rcLog(t *testing.T, label string, res test_utils.ContractTestCallResult) {
 
 // TestScenarioGachaponCapsuleMachine — "keep pulling until you get the chase".
 //
-// The opposite of a booster pack. One pool, no slot guarantees, no packs: you
+// The opposite of a booster pack. One stack, no slot guarantees, no packs: you
 // pay per pull and the odds come from how many units of each design are in the
 // machine. A 1-of-1 chase figure among 121 capsules is simply 1-in-121 on every
 // pull, and nothing promises you will ever see it.
 //
 // This is the shape to reach for when you want odds rather than guarantees —
-// and the cheapest bucket to run, because one pool needs no pack layout at all.
+// and the cheapest bucket to run, because one stack needs no pack layout at all.
 func TestScenarioGachaponCapsuleMachine(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
@@ -261,8 +261,8 @@ func TestScenarioGachaponCapsuleMachine(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, collector, 100000)
 
-	// Everything in ONE pool: weight comes from unit counts, not slots.
-	entries := bucketPoolEntriesJSON([][3]string{
+	// Everything in ONE stack: weight comes from unit counts, not slots.
+	entries := bucketStackEntriesJSON([][3]string{
 		{"capsulecommon", "100", "0"},
 		{"capsulerare", "20", "0"},
 		{"capsulechase", "1", "0"},
@@ -271,7 +271,7 @@ func TestScenarioGachaponCapsuleMachine(t *testing.T) {
 		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"300","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
 		NftContractID, entries, TokenID)
 	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
-	rcLog(t, "gachapon/seller: list bucket (3 entries, 1 pool)", res)
+	rcLog(t, "gachapon/seller: list bucket (3 entries, 1 stack)", res)
 	id := ParseCreated(res).Id
 
 	pull := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
@@ -323,7 +323,7 @@ func TestScenarioArtPrintDropWithRoyalty(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, buyer, 500000)
 
-	entries := bucketPoolEntriesJSON([][3]string{
+	entries := bucketStackEntriesJSON([][3]string{
 		{"printdawn", "10", "0"},
 		{"printdusk", "10", "0"},
 		{"printnoon", "10", "0"},
@@ -443,8 +443,8 @@ func TestScenarioLootCrateBoughtInBulkAndRestocked(t *testing.T) {
 	// A crate is 3 commons and 1 guaranteed gold.
 	// 16 commons, deliberately more than the three crates need: after the bulk
 	// buy the bucket still holds plenty of commons but NO gold, so the refusal
-	// below is about the empty pool rather than the bucket simply being short.
-	entries := bucketPoolEntriesJSON([][3]string{
+	// below is about the empty stack rather than the bucket simply being short.
+	entries := bucketStackEntriesJSON([][3]string{
 		{"cratecommon", "16", "0"},
 		{"crategold", "3", "1"},
 	})
@@ -452,7 +452,7 @@ func TestScenarioLootCrateBoughtInBulkAndRestocked(t *testing.T) {
 		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"4000","packDraws":[3,1],"expirationBlock":0}`,
 		NftContractID, entries, TokenID)
 	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
-	rcLog(t, "lootcrate/seller: list bucket (2 entries, 2 pools)", res)
+	rcLog(t, "lootcrate/seller: list bucket (2 entries, 2 stacks)", res)
 	id := ParseCreated(res).Id
 
 	// THREE crates in one transaction — twelve draws.
@@ -466,7 +466,7 @@ func TestScenarioLootCrateBoughtInBulkAndRestocked(t *testing.T) {
 	// The shop is now out of gold, so the next crate cannot be filled.
 	single := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
 	CallMarket(t, ct, "buyFromBucket", []byte(single), nil, regular, "", false, gas,
-		"Not enough units left in a required pool")
+		"Not enough units left in a required stack")
 
 	// The seller tops up a LIVE bucket, mid-sale. Restocking is append-only —
 	// a token id already in the bucket cannot be added again — so a top-up
@@ -475,7 +475,7 @@ func TestScenarioLootCrateBoughtInBulkAndRestocked(t *testing.T) {
 	MintNft(t, ct, seller, "cratecommon2", 4, 4)
 	MintNft(t, ct, seller, "crategold2", 1, 1)
 	restock := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id,
-		bucketPoolEntriesJSON([][3]string{{"cratecommon2", "4", "0"}, {"crategold2", "1", "1"}}))
+		bucketStackEntriesJSON([][3]string{{"cratecommon2", "4", "0"}, {"crategold2", "1", "1"}}))
 	restockRes, _, _ := CallMarket(t, ct, "addToBucket", []byte(restock), nil, seller, "", true, gas, "")
 	rcLog(t, "lootcrate/seller: restock a live bucket", restockRes)
 

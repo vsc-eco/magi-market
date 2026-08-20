@@ -713,7 +713,7 @@ type BundleItem struct {
 //
 // This used to be 20, because the draw re-read and re-scanned EVERY entry on
 // every draw: cost was O(entries), so a large bucket could not be drawn from
-// inside the default rcLimit at all. Entries now live in per-pool slot arrays
+// inside the default rcLimit at all. Entries now live in per-stack slot arrays
 // with chunked unit sums (see internal.go), so a draw touches
 // `entries/BucketChunk + BucketChunk` slots instead of all of them, and the
 // cap can be set by what the STATE should sensibly hold rather than by what a
@@ -771,37 +771,37 @@ const MaxDrawsPerTx = 24
 // opaque "cost limit exceeded".
 const MaxDrawWork = 600
 
-// MaxBucketPools caps how many pools a pack may draw from. Each pool costs a
+// MaxBucketStacks caps how many stacks a pack may draw from. Each stack costs a
 // pass over the entries per draw, so this bounds the work a single purchase can
 // ask for. Four is already a Pokemon-style pack (commons / uncommons / reverse
 // holo / rare); eight leaves room without letting a pack become unbounded.
-const MaxBucketPools = 8
+const MaxBucketStacks = 8
 
 // BucketEntry is one already-minted token id and how many units of it are in
 // the bucket. Amount > 1 is how editions are stocked: each unit is a separate
 // prize, so an entry with 50 units is 50x likelier to be drawn than a 1/1.
 //
-// Pool groups entries that compete with each other. A bucket with everything in
-// pool 0 is one flat pile — the simple case. Splitting entries across pools is
-// what makes a real card pack possible: commons in pool 0, rares in pool 1, and
-// a pack that always takes one draw from pool 1 always contains a rare.
+// Stack groups entries that compete with each other. A bucket with everything in
+// stack 0 is one flat pile — the simple case. Splitting entries across stacks is
+// what makes a real card pack possible: commons in stack 0, rares in stack 1, and
+// a pack that always takes one draw from stack 1 always contains a rare.
 type BucketEntry struct {
 	TokenId string `json:"tokenId"`
 	Amount  uint64 `json:"amount"`
-	Pool    uint64 `json:"pool"`
+	Stack    uint64 `json:"stack"`
 }
 
 // ListBucketPayload creates a bucket. The seller enables single draws, pack
 // draws, or both: a zero/empty price switches that mode off, and at least one
 // must be on.
 //
-// PackDraws describes a pack as draws-per-pool, indexed by pool: [5] is five
+// PackDraws describes a pack as draws-per-stack, indexed by stack: [5] is five
 // draws from one flat pile, and [4,3,1,1] is a card pack — four commons, three
 // uncommons, one reverse holo, one rare — where the last slot GUARANTEES a rare
-// because it can only be filled from pool 3. One field expresses both the
+// because it can only be filled from stack 3. One field expresses both the
 // simple and the elaborate case, and the pack size is just its sum.
 //
-// Single draws always come from pool 0.
+// Single draws always come from stack 0.
 type ListBucketPayload struct {
 	NftContract     string        `json:"nftContract"`
 	Entries         []BucketEntry `json:"entries"`
@@ -895,7 +895,7 @@ type BucketDrawAttributes struct {
 	BucketId  uint64 `json:"bucketId"`
 	Buyer     string `json:"buyer"`
 	TokenId   string `json:"tokenId"`
-	Pool      uint64 `json:"pool"`
+	Stack      uint64 `json:"stack"`
 	DrawIndex uint64 `json:"drawIndex"`
 }
 
@@ -929,7 +929,7 @@ type BucketEntryDroppedEvent struct {
 type BucketEntryDroppedAttributes struct {
 	BucketId uint64 `json:"bucketId"`
 	TokenId  string `json:"tokenId"`
-	Pool     uint64 `json:"pool"`
+	Stack     uint64 `json:"stack"`
 	Units    uint64 `json:"units"`
 	Reason   string `json:"reason"`
 }

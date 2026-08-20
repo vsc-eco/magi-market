@@ -8439,8 +8439,8 @@ func tinyjsonC3DecodeBucketEntry(in *jlexer.Lexer, out *BucketEntry) {
 			out.TokenId = string(in.String())
 		case "amount":
 			out.Amount = uint64(in.Uint64())
-		case "pool":
-			out.Pool = uint64(in.Uint64())
+		case "stack":
+			out.Stack = uint64(in.Uint64())
 		default:
 			in.SkipRecursive()
 		}
@@ -8754,9 +8754,9 @@ func tinyjsonC3EncodeBucketEntry(out *jwriter.Writer, in BucketEntry) {
 		out.Uint64(uint64(in.Amount))
 	}
 	{
-		const p2 string = ",\"pool\":"
+		const p2 string = ",\"stack\":"
 		out.RawString(p2)
-		out.Uint64(uint64(in.Pool))
+		out.Uint64(uint64(in.Stack))
 	}
 	out.RawByte('}')
 }
@@ -8912,9 +8912,9 @@ func tinyjsonC3EncodeBucketDrawEvent(out *jwriter.Writer, in BucketDrawEvent) {
 			out.String(string(in.Attributes.TokenId))
 		}
 		{
-			const p2 string = ",\"pool\":"
+			const p2 string = ",\"stack\":"
 			out.RawString(p2)
-			out.Uint64(uint64(in.Attributes.Pool))
+			out.Uint64(uint64(in.Attributes.Stack))
 		}
 		{
 			const p2 string = ",\"drawIndex\":"
@@ -9027,9 +9027,9 @@ func tinyjsonC3EncodeBucketEntryDroppedEvent(out *jwriter.Writer, in BucketEntry
 			out.String(string(in.Attributes.TokenId))
 		}
 		{
-			const p2 string = ",\"pool\":"
+			const p2 string = ",\"stack\":"
 			out.RawString(p2)
-			out.Uint64(uint64(in.Attributes.Pool))
+			out.Uint64(uint64(in.Attributes.Stack))
 		}
 		{
 			const p2 string = ",\"units\":"

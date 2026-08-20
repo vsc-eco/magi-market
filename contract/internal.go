@@ -489,16 +489,16 @@ func setNextBundleId(id uint64) {
 // Bucket State Helpers (random-draw sales)
 // ===================================
 //
-// A bucket is a pool of already-minted NFT units from ONE collection, sold at
+// A bucket is a stack of already-minted NFT units from ONE collection, sold at
 // a fixed price where the CONTRACT picks which unit the buyer receives.
 //
-// Entries are stored as PER-POOL SLOT ARRAYS with chunked unit sums. The
-// original layout was one flat array plus a `_pl` pool tag per entry, which
+// Entries are stored as PER-STACK SLOT ARRAYS with chunked unit sums. The
+// original layout was one flat array plus a `_pl` stack tag per entry, which
 // forced every draw to read and scan all of it: a draw was O(entries), so a
 // bucket of a few hundred cards could not be drawn from inside the default
 // rcLimit at all — the purchase died before it could pay anyone.
 //
-// Splitting by pool means a draw never looks at entries it could not have
+// Splitting by stack means a draw never looks at entries it could not have
 // picked, and the chunk sums mean it does not look at most of the ones it
 // could: walk the chunk sums to find which chunk holds the chosen unit, then
 // scan only that chunk. Work per draw is `slots/BucketChunk + BucketChunk`
@@ -512,13 +512,13 @@ func setNextBundleId(id uint64) {
 //	bkt|<id>|pp         price for one pack        ("" / zero = pack sales off)
 //	bkt|<id>|act        active flag
 //	bkt|<id>|exp        expiration block
-//	bkt|<id>|n          entry count, all pools    (cap: MaxBucketEntries)
-//	bkt|<id>|u          units remaining, all pools
-//	bkt|<id>|np         number of pools in use
-//	bkt|<id>|e<k>n      slot count in pool k
-//	bkt|<id>|e<k>u      units remaining in pool k
-//	bkt|<id>|e<k>c<j>   units remaining in chunk j of pool k
-//	bkt|<id>|e<k>_<i>   slot i of pool k, packed "<units>:<tokenId>"
+//	bkt|<id>|n          entry count, all stacks    (cap: MaxBucketEntries)
+//	bkt|<id>|u          units remaining, all stacks
+//	bkt|<id>|np         number of stacks in use
+//	bkt|<id>|e<k>n      slot count in stack k
+//	bkt|<id>|e<k>u      units remaining in stack k
+//	bkt|<id>|e<k>c<j>   units remaining in chunk j of stack k
+//	bkt|<id>|e<k>_<i>   slot i of stack k, packed "<units>:<tokenId>"
 //	bkt|<id>|h|<tid>    presence marker, so a duplicate id costs one read
 //	bkt|<id>|fb|rb|rr   fee/royalty snapshot, as bundles
 //	bkt|<id>|rs_*       resolved royalty split snapshot
@@ -566,16 +566,16 @@ func setNextBucketId(id uint64) {
 
 // ---- Slot addressing --------------------------------------------------
 
-func poolPrefix(pool uint64) string {
-	return "e" + strconv.FormatUint(pool, 10)
+func stackPrefix(stack uint64) string {
+	return "e" + strconv.FormatUint(stack, 10)
 }
 
-func slotField(pool, idx uint64) string {
-	return poolPrefix(pool) + "_" + strconv.FormatUint(idx, 10)
+func slotField(stack, idx uint64) string {
+	return stackPrefix(stack) + "_" + strconv.FormatUint(idx, 10)
 }
 
-func chunkField(pool, chunk uint64) string {
-	return poolPrefix(pool) + "c" + strconv.FormatUint(chunk, 10)
+func chunkField(stack, chunk uint64) string {
+	return stackPrefix(stack) + "c" + strconv.FormatUint(chunk, 10)
 }
 
 // packSlot stores units and token id in ONE state value. Splitting them across
@@ -602,12 +602,12 @@ func unpackSlot(s string) (uint64, string) {
 	return 0, ""
 }
 
-func getBucketSlot(id, pool, idx uint64) (uint64, string) {
-	return unpackSlot(getBucketField(id, slotField(pool, idx)))
+func getBucketSlot(id, stack, idx uint64) (uint64, string) {
+	return unpackSlot(getBucketField(id, slotField(stack, idx)))
 }
 
-func setBucketSlot(id, pool, idx, units uint64, tokenId string) {
-	setBucketField(id, slotField(pool, idx), packSlot(units, tokenId))
+func setBucketSlot(id, stack, idx, units uint64, tokenId string) {
+	setBucketField(id, slotField(stack, idx), packSlot(units, tokenId))
 }
 
 // ---- Counters ---------------------------------------------------------
@@ -616,15 +616,15 @@ func bucketUnitsRemaining(id uint64) uint64 {
 	return getBucketUint64(id, "u")
 }
 
-// bucketPoolUnits is what makes a pack's guarantee checkable: a pack promising
-// a rare must be able to fill that slot from the rare pool specifically, so the
+// bucketStackUnits is what makes a pack's guarantee checkable: a pack promising
+// a rare must be able to fill that slot from the rare stack specifically, so the
 // grand total is not a sufficient check.
-func bucketPoolUnits(id, pool uint64) uint64 {
-	return getBucketUint64(id, poolPrefix(pool)+"u")
+func bucketStackUnits(id, stack uint64) uint64 {
+	return getBucketUint64(id, stackPrefix(stack)+"u")
 }
 
-func bucketPoolSlots(id, pool uint64) uint64 {
-	return getBucketUint64(id, poolPrefix(pool)+"n")
+func bucketStackSlots(id, stack uint64) uint64 {
+	return getBucketUint64(id, stackPrefix(stack)+"n")
 }
 
 // hasBucketToken answers "is this token id already stocked" in one read.
@@ -641,39 +641,39 @@ func markBucketToken(id uint64, tokenId string) {
 }
 
 // appendBucketEntries stocks a batch of entries, writing each slot once and the
-// counters once per pool rather than once per entry.
+// counters once per stack rather than once per entry.
 //
 // Callers MUST have validated the entries first (non-empty id, non-zero amount,
-// pool in range, no duplicate, seller holds and has approved the units) —
+// stack in range, no duplicate, seller holds and has approved the units) —
 // this does the bookkeeping, not the checking.
 func appendBucketEntries(id uint64, entries []BucketEntry) uint64 {
-	// Per-pool deltas accumulated in memory, so a batch of 64 entries into one
-	// pool writes its counters once instead of 64 times.
-	nextSlot := make([]uint64, MaxBucketPools)
-	poolDelta := make([]uint64, MaxBucketPools)
-	touched := make([]bool, MaxBucketPools)
+	// Per-stack deltas accumulated in memory, so a batch of 64 entries into one
+	// stack writes its counters once instead of 64 times.
+	nextSlot := make([]uint64, MaxBucketStacks)
+	stackDelta := make([]uint64, MaxBucketStacks)
+	touched := make([]bool, MaxBucketStacks)
 	// Chunk sums are sparse: only chunks this batch actually lands in.
 	chunkIdx := make([]uint64, 0, 8)
-	chunkPool := make([]uint64, 0, 8)
+	chunkStack := make([]uint64, 0, 8)
 	chunkDelta := make([]uint64, 0, 8)
 
 	unitsAdded := uint64(0)
 	for _, e := range entries {
-		if !touched[e.Pool] {
-			touched[e.Pool] = true
-			nextSlot[e.Pool] = bucketPoolSlots(id, e.Pool)
+		if !touched[e.Stack] {
+			touched[e.Stack] = true
+			nextSlot[e.Stack] = bucketStackSlots(id, e.Stack)
 		}
-		idx := nextSlot[e.Pool]
-		setBucketSlot(id, e.Pool, idx, e.Amount, e.TokenId)
+		idx := nextSlot[e.Stack]
+		setBucketSlot(id, e.Stack, idx, e.Amount, e.TokenId)
 		markBucketToken(id, e.TokenId)
-		nextSlot[e.Pool]++
-		poolDelta[e.Pool] = safeAdd(poolDelta[e.Pool], e.Amount)
+		nextSlot[e.Stack]++
+		stackDelta[e.Stack] = safeAdd(stackDelta[e.Stack], e.Amount)
 		unitsAdded = safeAdd(unitsAdded, e.Amount)
 
 		ch := idx / BucketChunk
 		found := false
 		for j := range chunkIdx {
-			if chunkIdx[j] == ch && chunkPool[j] == e.Pool {
+			if chunkIdx[j] == ch && chunkStack[j] == e.Stack {
 				chunkDelta[j] = safeAdd(chunkDelta[j], e.Amount)
 				found = true
 				break
@@ -681,25 +681,25 @@ func appendBucketEntries(id uint64, entries []BucketEntry) uint64 {
 		}
 		if !found {
 			chunkIdx = append(chunkIdx, ch)
-			chunkPool = append(chunkPool, e.Pool)
+			chunkStack = append(chunkStack, e.Stack)
 			chunkDelta = append(chunkDelta, e.Amount)
 		}
 	}
 
 	np := getBucketUint64(id, "np")
-	for pool := uint64(0); pool < MaxBucketPools; pool++ {
-		if !touched[pool] {
+	for stack := uint64(0); stack < MaxBucketStacks; stack++ {
+		if !touched[stack] {
 			continue
 		}
-		setBucketUint64(id, poolPrefix(pool)+"n", nextSlot[pool])
-		setBucketUint64(id, poolPrefix(pool)+"u",
-			safeAdd(bucketPoolUnits(id, pool), poolDelta[pool]))
-		if pool+1 > np {
-			np = pool + 1
+		setBucketUint64(id, stackPrefix(stack)+"n", nextSlot[stack])
+		setBucketUint64(id, stackPrefix(stack)+"u",
+			safeAdd(bucketStackUnits(id, stack), stackDelta[stack]))
+		if stack+1 > np {
+			np = stack + 1
 		}
 	}
 	for j := range chunkIdx {
-		f := chunkField(chunkPool[j], chunkIdx[j])
+		f := chunkField(chunkStack[j], chunkIdx[j])
 		setBucketUint64(id, f, safeAdd(getBucketUint64(id, f), chunkDelta[j]))
 	}
 	setBucketUint64(id, "np", np)

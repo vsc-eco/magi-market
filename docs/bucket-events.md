@@ -18,8 +18,8 @@ without reading contract state.
   "paymentToken":"paytoken","pricePerDraw":"0","pricePerPack":"5000",
   "packDraws":[4,1],"expirationBlock":0,
   "feeBps":250,"royaltyBps":0,"royaltyRecipient":"",
-  "entries":[{"tokenId":"boostercommon","amount":24,"pool":0},
-             {"tokenId":"boosterrare","amount":6,"pool":1}],
+  "entries":[{"tokenId":"boostercommon","amount":24,"stack":0},
+             {"tokenId":"boosterrare","amount":6,"stack":1}],
   "entryCount":2,"units":30},"tx":"..."}
 ```
 
@@ -36,7 +36,7 @@ collection is configured with later.
 
 ```json
 {"bucketId":0,"seller":"hive:tibfox",
- "entries":[{"tokenId":"evextra","amount":2,"pool":0}],
+ "entries":[{"tokenId":"evextra","amount":2,"stack":0}],
  "added":1,"totalEntries":3,"unitsAdded":2}
 ```
 
@@ -46,11 +46,11 @@ again, so entries here are always new.
 ## `bucket_draw` — one per delivered unit
 
 ```json
-{"bucketId":0,"buyer":"hive:ash","tokenId":"boostercommon","pool":0,"drawIndex":0}
+{"bucketId":0,"buyer":"hive:ash","tokenId":"boostercommon","stack":0,"drawIndex":0}
 ```
 
-`pool` matters: a mirror tracking units per pool needs to know which one to
-decrement, and pool balance is not derivable from the totals.
+`stack` matters: a mirror tracking units per stack needs to know which one to
+decrement, and stack balance is not derivable from the totals.
 
 ## `bucket_purchase` — one per transaction
 
@@ -66,7 +66,7 @@ that reads `unitsLeft` re-anchors on every purchase.
 ## `bucket_entry_dropped`
 
 ```json
-{"bucketId":0,"tokenId":"evextra","pool":0,"units":2,"reason":"seller no longer holds it"}
+{"bucketId":0,"tokenId":"evextra","stack":0,"units":2,"reason":"seller no longer holds it"}
 ```
 
 Emitted when the seller no longer holds an entry or has revoked approval. The
@@ -99,12 +99,12 @@ unsold stock with the seller.
 |---|---|
 | terms, pack shape, expiry | `bucket_listed` |
 | fee / royalty as it will actually pay | `bucket_listed` snapshot fields |
-| contents and per-pool composition | `bucket_listed` + `bucket_restocked` entries |
+| contents and per-stack composition | `bucket_listed` + `bucket_restocked` entries |
 | units remaining | `bucket_purchase.unitsLeft` (authoritative), adjusted by `bucket_entry_dropped.units` |
 | who bought what | `bucket_draw` per unit, `bucket_purchase` per transaction |
 | open / closed | `bucket_sold_out` or `bucket_delisted`; expiry is derivable from `expirationBlock` |
 
-**A bucket with guaranteed slots may never sell out.** The guaranteed pool
+**A bucket with guaranteed slots may never sell out.** The guaranteed stack
 empties first and strands whatever is left in the others, so `bucket_sold_out`
-is not certain to arrive — track per-pool units rather than assuming a bucket
+is not certain to arrive — track per-stack units rather than assuming a bucket
 drains evenly.

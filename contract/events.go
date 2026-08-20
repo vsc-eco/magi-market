@@ -572,12 +572,12 @@ func emitBucketRestocked(bucketId uint64, seller string, entries []BucketEntry, 
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitBucketDraw(bucketId uint64, buyer, tokenId string, pool, drawIndex uint64) {
+func emitBucketDraw(bucketId uint64, buyer, tokenId string, stack, drawIndex uint64) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BucketDrawEvent{
 		Type: "bucket_draw",
 		Attributes: BucketDrawAttributes{
-			BucketId: bucketId, Buyer: buyer, TokenId: tokenId, Pool: pool, DrawIndex: drawIndex,
+			BucketId: bucketId, Buyer: buyer, TokenId: tokenId, Stack: stack, DrawIndex: drawIndex,
 		},
 		Tx: *txID,
 	}
@@ -601,12 +601,12 @@ func emitBucketPurchase(bucketId uint64, buyer, mode string, draws uint64, payme
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitBucketEntryDropped(bucketId uint64, tokenId string, pool, units uint64, reason string) {
+func emitBucketEntryDropped(bucketId uint64, tokenId string, stack, units uint64, reason string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BucketEntryDroppedEvent{
 		Type: "bucket_entry_dropped",
 		Attributes: BucketEntryDroppedAttributes{
-			BucketId: bucketId, TokenId: tokenId, Pool: pool, Units: units, Reason: reason,
+			BucketId: bucketId, TokenId: tokenId, Stack: stack, Units: units, Reason: reason,
 		},
 		Tx: *txID,
 	}

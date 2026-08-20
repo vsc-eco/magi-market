@@ -22,7 +22,7 @@ const MaxBucketEntriesTest = 5
 // Buckets: fixed-price sales where the CONTRACT picks which unit the buyer
 // gets. These tests pin the behaviour that makes that safe and fair — the draw
 // is weighted by units, every drawn unit is actually delivered, disabled sale
-// modes are refused, and the pool cannot be over-drawn.
+// modes are refused, and the stack cannot be over-drawn.
 
 // bucketEntriesJSON builds the entries array for a listBucket payload.
 func bucketEntriesJSON(entries [][2]string) string {
@@ -31,19 +31,19 @@ func bucketEntriesJSON(entries [][2]string) string {
 		if i > 0 {
 			s += ","
 		}
-		s += fmt.Sprintf(`{"tokenId":"%s","amount":%s,"pool":0}`, e[0], e[1])
+		s += fmt.Sprintf(`{"tokenId":"%s","amount":%s,"stack":0}`, e[0], e[1])
 	}
 	return s + "]"
 }
 
-// bucketPoolEntriesJSON builds entries spread across pools: {tokenId, amount, pool}.
-func bucketPoolEntriesJSON(entries [][3]string) string {
+// bucketStackEntriesJSON builds entries spread across stacks: {tokenId, amount, stack}.
+func bucketStackEntriesJSON(entries [][3]string) string {
 	s := "["
 	for i, e := range entries {
 		if i > 0 {
 			s += ","
 		}
-		s += fmt.Sprintf(`{"tokenId":"%s","amount":%s,"pool":%s}`, e[0], e[1], e[2])
+		s += fmt.Sprintf(`{"tokenId":"%s","amount":%s,"stack":%s}`, e[0], e[1], e[2])
 	}
 	return s + "]"
 }
@@ -119,7 +119,7 @@ func TestBucketDrawIsWeightedByUnits(t *testing.T) {
 
 	id := listBucket(t, ct, seller, bucketEntriesJSON([][2]string{{"rare", "1"}, {"common", "19"}}), "1000", "0", "[]")
 
-	// Draw the pool down one at a time; every draw must deliver something.
+	// Draw the stack down one at a time; every draw must deliver something.
 	for _, b := range buyers {
 		for i := 0; i < 5; i++ {
 			buy := fmt.Sprintf(`{"bucketId":%d,"mode":"single","quantity":1,"maxTotalPrice":""}`, id)
@@ -134,11 +134,11 @@ func TestBucketDrawIsWeightedByUnits(t *testing.T) {
 		common += QueryNftBalance(t, ct, b, "common")
 	}
 
-	// Draining the whole pool must yield exactly the stocked supply — no unit
+	// Draining the whole stack must yield exactly the stocked supply — no unit
 	// invented, none lost, regardless of the order they came out in.
 	assert.Equal(t, uint64(1), rare, "the single rare unit is drawn exactly once")
 	assert.Equal(t, uint64(19), common, "all common units are drawn")
-	// The whole pool moved: 20 draws delivered exactly the 20 stocked units.
+	// The whole stack moved: 20 draws delivered exactly the 20 stocked units.
 	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "rare"))
 	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "common"))
 }
@@ -212,12 +212,12 @@ func TestBucketCannotOverdraw(t *testing.T) {
 
 	// packSize 5 against 2 remaining units.
 	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
-	// a pack larger than the remaining pool must abort
+	// a pack larger than the remaining stack must abort
 	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas, "")
 
 	// Nothing was taken on the failed attempt.
 	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, buyer, "o1"), "failed purchase delivers nothing")
-	assert.Equal(t, uint64(2), QueryNftBalance(t, ct, seller, "o1"), "failed purchase leaves the pool intact")
+	assert.Equal(t, uint64(2), QueryNftBalance(t, ct, seller, "o1"), "failed purchase leaves the stack intact")
 
 	// Draining exactly the remaining units is fine, and then it is sold out.
 	for i := 0; i < 2; i++ {
@@ -290,9 +290,9 @@ func TestBucketSellerCannotBuyOwn(t *testing.T) {
 	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, seller, "", false, gas, "")
 }
 
-// TestBucketPokemonStylePack: pools turn a bucket into a real card pack. Four
+// TestBucketPokemonStylePack: stacks turn a bucket into a real card pack. Four
 // commons, three uncommons and one guaranteed rare per pack — the rare slot can
-// only be filled from the rare pool, so it is a promise rather than a
+// only be filled from the rare stack, so it is a promise rather than a
 // probability.
 func TestBucketPokemonStylePack(t *testing.T) {
 	ct := SetupContractTest()
@@ -307,7 +307,7 @@ func TestBucketPokemonStylePack(t *testing.T) {
 	MintNft(t, ct, seller, "rare", 2, 100)
 	ApproveNftForMarket(t, ct, seller)
 
-	entries := bucketPoolEntriesJSON([][3]string{
+	entries := bucketStackEntriesJSON([][3]string{
 		{"common", "8", "0"},
 		{"uncommon", "6", "1"},
 		{"holo", "4", "2"},
@@ -337,10 +337,10 @@ func TestBucketPokemonStylePack(t *testing.T) {
 	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "common"))
 }
 
-// TestBucketRefusesPackWithEmptySlotPool: a pack that promises a rare must not
-// be listable when the rare pool is empty — otherwise the guarantee is a lie the
+// TestBucketRefusesPackWithEmptySlotStack: a pack that promises a rare must not
+// be listable when the rare stack is empty — otherwise the guarantee is a lie the
 // buyer only discovers at purchase time.
-func TestBucketRefusesPackWithEmptySlotPool(t *testing.T) {
+func TestBucketRefusesPackWithEmptySlotStack(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
@@ -350,13 +350,13 @@ func TestBucketRefusesPackWithEmptySlotPool(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, buyer, 100000)
 
-	// packDraws asks for a draw from pool 1, but nothing is stocked there.
+	// packDraws asks for a draw from stack 1, but nothing is stocked there.
 	//
 	// Listing SUCCEEDS: stocking is split across calls now, so a bucket whose
-	// rare pool arrives in a later addToBucket is normal, not an error — that is
+	// rare stack arrives in a later addToBucket is normal, not an error — that is
 	// exactly the shape a Pokemon-style pack has. The guarantee is enforced
 	// where it can be enforced against live state instead.
-	entries := bucketPoolEntriesJSON([][3]string{{"onlycommon", "10", "0"}})
+	entries := bucketStackEntriesJSON([][3]string{{"onlycommon", "10", "0"}})
 	payload := fmt.Sprintf(
 		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"10000","packDraws":[4,1],"expirationBlock":0}`,
 		NftContractID, entries, TokenID)
@@ -368,24 +368,24 @@ func TestBucketRefusesPackWithEmptySlotPool(t *testing.T) {
 	before := QueryTokenBalance(t, ct, buyer)
 	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
 	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", false, gas,
-		"Not enough units left in a required pool")
+		"Not enough units left in a required stack")
 	assert.Equal(t, before, QueryTokenBalance(t, ct, buyer), "buyer must not be charged")
 
-	// Once the rare pool is stocked, the same purchase goes through and the
+	// Once the rare stack is stocked, the same purchase goes through and the
 	// guaranteed slot is honoured.
 	MintNft(t, ct, seller, "therare", 1, 1)
 	add := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id,
-		bucketPoolEntriesJSON([][3]string{{"therare", "1", "1"}}))
+		bucketStackEntriesJSON([][3]string{{"therare", "1", "1"}}))
 	CallMarket(t, ct, "addToBucket", []byte(add), nil, seller, "", true, gas, "")
 	_, _, logs := CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, gas, "")
 	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, buyer, "therare"),
-		"the guaranteed slot must be filled from the rare pool")
+		"the guaranteed slot must be filled from the rare stack")
 	assert.Len(t, drawnTokenIds(logs), 5, "a [4,1] pack delivers five cards")
 }
 
-// TestBucketPackStopsWhenRarePoolEmpties: once the guaranteed slot's pool runs
+// TestBucketPackStopsWhenRareStackEmpties: once the guaranteed slot's stack runs
 // out, packs must stop rather than quietly delivering a pack without its rare.
-func TestBucketPackStopsWhenRarePoolEmpties(t *testing.T) {
+func TestBucketPackStopsWhenRareStackEmpties(t *testing.T) {
 	ct := SetupContractTest()
 	InitFullSetup(t, ct)
 
@@ -394,7 +394,7 @@ func TestBucketPackStopsWhenRarePoolEmpties(t *testing.T) {
 	MintNft(t, ct, seller, "r", 1, 100)
 	ApproveNftForMarket(t, ct, seller)
 
-	entries := bucketPoolEntriesJSON([][3]string{{"c", "20", "0"}, {"r", "1", "1"}})
+	entries := bucketStackEntriesJSON([][3]string{{"c", "20", "0"}, {"r", "1", "1"}})
 	id := listBucket(t, ct, seller, entries, "0", "10000", "[2,1]")
 
 	b1 := "hive:rarebuyer1"
@@ -406,7 +406,7 @@ func TestBucketPackStopsWhenRarePoolEmpties(t *testing.T) {
 	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, b1, "", true, gas, "")
 	assert.Equal(t, uint64(1), QueryNftBalance(t, ct, b1, "r"), "first pack takes the only rare")
 
-	// Commons remain, but the rare pool is empty — the pack can no longer keep
+	// Commons remain, but the rare stack is empty — the pack can no longer keep
 	// its promise, so it must refuse.
 	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, b2, "", false, gas, "")
 	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, b2, "c"), "a refused pack delivers nothing")
@@ -428,17 +428,17 @@ func TestBucketLargePurchaseFitsDefaultRcLimit(t *testing.T) {
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, buyer, 500000)
 
-	entries := bucketPoolEntriesJSON([][3]string{{"bulk-a", "12", "0"}, {"bulk-b", "8", "1"}})
-	// 3 from pool 0 + 2 from pool 1 = a 5-card pack.
+	entries := bucketStackEntriesJSON([][3]string{{"bulk-a", "12", "0"}, {"bulk-b", "8", "1"}})
+	// 3 from stack 0 + 2 from stack 1 = a 5-card pack.
 	id := listBucket(t, ct, seller, entries, "0", "10000", "[3,2]")
 
 	// Four packs in one call = 20 draws.
 	buy := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":4,"maxTotalPrice":""}`, id)
 	CallMarket(t, ct, "buyFromBucket", []byte(buy), nil, buyer, "", true, uint(2_000_000_000), "")
 
-	// Every pack keeps its shape: 4 packs x 3 = 12 from pool 0, 4 x 2 = 8 from pool 1.
-	assert.Equal(t, uint64(12), QueryNftBalance(t, ct, buyer, "bulk-a"), "12 units from pool 0")
-	assert.Equal(t, uint64(8), QueryNftBalance(t, ct, buyer, "bulk-b"), "8 units from pool 1")
+	// Every pack keeps its shape: 4 packs x 3 = 12 from stack 0, 4 x 2 = 8 from stack 1.
+	assert.Equal(t, uint64(12), QueryNftBalance(t, ct, buyer, "bulk-a"), "12 units from stack 0")
+	assert.Equal(t, uint64(8), QueryNftBalance(t, ct, buyer, "bulk-b"), "8 units from stack 1")
 	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "bulk-a"), "seller drained")
 	assert.Equal(t, uint64(0), QueryNftBalance(t, ct, seller, "bulk-b"))
 }
@@ -455,24 +455,24 @@ func TestBucketWorstCaseRcHeadroom(t *testing.T) {
 	seller := ownerAddress
 	buyer := "hive:worstcase"
 
-	// 5 ids x 6 units across 2 pools: pool 1 gets 12 units, enough for three
-	// 6-card packs (9 per pool).
+	// 5 ids x 6 units across 2 stacks: stack 1 gets 12 units, enough for three
+	// 6-card packs (9 per stack).
 	entries := make([][3]string, 0, MaxBucketEntriesTest)
 	for i := 0; i < MaxBucketEntriesTest; i++ {
 		id := fmt.Sprintf("w%02d", i)
 		MintNft(t, ct, seller, id, 6, 100)
-		pool := "0"
+		stack := "0"
 		if i%2 == 1 {
-			pool = "1"
+			stack = "1"
 		}
-		entries = append(entries, [3]string{id, "6", pool})
+		entries = append(entries, [3]string{id, "6", stack})
 	}
 	ApproveNftForMarket(t, ct, seller)
 	MintAndApproveToken(t, ct, buyer, 500000)
 
-	// 6-card packs (3 from each pool) against a 5-entry table: work per pack is
+	// 6-card packs (3 from each stack) against a 5-entry table: work per pack is
 	// 6 * (5+4) = 54, so five packs (270) fit and six (324) do not.
-	id := listBucket(t, ct, seller, bucketPoolEntriesJSON(entries), "0", "10000", "[3,3]")
+	id := listBucket(t, ct, seller, bucketStackEntriesJSON(entries), "0", "10000", "[3,3]")
 
 	// Six packs = 36 draws: over both MaxDrawsPerTx and the work bound. Refused
 	// up front with a message the buyer can act on, NOT an opaque "cost limit
@@ -756,14 +756,14 @@ func TestBucketListValidation(t *testing.T) {
 			fmt.Sprintf(`{"nftContract":"%s","entries":[],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
 			"At least one entry required"},
 		{"empty token id",
-			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"","amount":1,"pool":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
+			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"","amount":1,"stack":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
 			"Token ID required for each bucket entry"},
 		{"zero amount",
-			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"v1","amount":0,"pool":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
+			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"v1","amount":0,"stack":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
 			"Amount must be greater than zero"},
-		{"pool out of range",
-			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"v1","amount":1,"pool":99}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
-			"Entry pool out of range"},
+		{"stack out of range",
+			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"v1","amount":1,"stack":99}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
+			"Entry stack out of range"},
 		{"no price at all",
 			fmt.Sprintf(`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, one, TokenID),
 			"Set a single-draw price, a pack price, or both"},
@@ -776,14 +776,14 @@ func TestBucketListValidation(t *testing.T) {
 		{"pack bigger than the draw cap",
 			fmt.Sprintf(`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"1000","packDraws":[99],"expirationBlock":0}`, NftContractID, one, TokenID),
 			"Pack size exceeds the per-transaction draw cap"},
-		{"too many pools",
+		{"too many stacks",
 			fmt.Sprintf(`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"1000","packDraws":[1,1,1,1,1,1,1,1,1],"expirationBlock":0}`, NftContractID, one, TokenID),
-			"Too many pools in packDraws"},
+			"Too many stacks in packDraws"},
 		{"more units than the seller holds",
-			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"v1","amount":999,"pool":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
+			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"v1","amount":999,"stack":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
 			"Insufficient NFT balance to stock bucket"},
 		{"token id with invalid characters",
-			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"bad\",\"from\":\"hive:victim","amount":1,"pool":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
+			fmt.Sprintf(`{"nftContract":"%s","entries":[{"tokenId":"bad\",\"from\":\"hive:victim","amount":1,"stack":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, TokenID),
 			"tokenId contains invalid characters"},
 		{"payment token not whitelisted",
 			fmt.Sprintf(`{"nftContract":"%s","entries":%s,"paymentToken":"nosuchtoken","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`, NftContractID, one),
@@ -837,7 +837,7 @@ func TestBucketBuyValidation(t *testing.T) {
 	}
 
 	// None of the refusals touched the bucket.
-	assert.Equal(t, uint64(4), QueryNftBalance(t, ct, seller, "bv"), "refused buys leave the pool intact")
+	assert.Equal(t, uint64(4), QueryNftBalance(t, ct, seller, "bv"), "refused buys leave the stack intact")
 }
 
 func TestBucketDelistValidation(t *testing.T) {
@@ -999,7 +999,7 @@ func TestBucketAllEntriesStaleAbortsCleanly(t *testing.T) {
 // taxes every transfer, the market must distribute what it ACTUALLY received,
 // not the nominal price. Buckets take payment once per purchase rather than per
 // draw, so this needs proving on the pack path too — pricing a pack off the
-// nominal amount would quietly overpay the seller out of pool funds.
+// nominal amount would quietly overpay the seller out of stack funds.
 func TestBucketFeeOnTransferTokenDistributesReceived(t *testing.T) {
 	ct := SetupContractTest()
 	initFeeTokenSetup(t, ct)
@@ -1347,7 +1347,7 @@ func TestBucketRejectsOverfullBucket(t *testing.T) {
 // Chunked-layout regressions
 // ===================================
 //
-// Both of these exist because entries moved from one flat array into per-pool
+// Both of these exist because entries moved from one flat array into per-stack
 // slot arrays with chunked unit sums. That change is invisible to every test
 // written before it: a small bucket is one chunk, and a bucket that is only
 // ever stocked before it is drawn from never exercises appending onto partially
@@ -1421,7 +1421,7 @@ func TestBucketRestockAfterDraws(t *testing.T) {
 // TestBucketPrunesStaleEntryInLaterChunk puts the stale entry BEYOND the first
 // chunk.
 //
-// Pruning decrements `chunks[pool][idx/BucketChunk]`. Every stale-entry test so
+// Pruning decrements `chunks[stack][idx/BucketChunk]`. Every stale-entry test so
 // far used a handful of entries, so that division always yielded chunk 0 and the
 // indexing was never actually exercised. Here the stale entry sits at index 34 —
 // chunk 1 — and carries almost all the bucket's weight, so the draw is
@@ -1543,8 +1543,8 @@ func TestBucketPrunesStaleEntryInLaterChunk(t *testing.T) {
 //
 // The abort MESSAGE is what pins the bound. With 20 stale entries and a cap of
 // 12, the draw prunes 13 and gives up while units still remain — "No deliverable
-// entries left in bucket". Without the cap it would prune all 20, drive the pool
-// to zero, and abort with "Bucket pool is sold out" instead. So the message
+// entries left in bucket". Without the cap it would prune all 20, drive the stack
+// to zero, and abort with "Bucket stack is sold out" instead. So the message
 // distinguishes bounded from unbounded pruning, deterministically.
 func TestBucketMaxStaleRetriesBoundsPruning(t *testing.T) {
 	ct := SetupContractTest()
@@ -1679,7 +1679,7 @@ func stockHostileCollection(t *testing.T, ct *test_utils.ContractTest, seller, t
 func listHostileBucket(t *testing.T, ct *test_utils.ContractTest, seller, tokenId string, amount uint64) uint64 {
 	t.Helper()
 	payload := fmt.Sprintf(
-		`{"nftContract":"%s","entries":[{"tokenId":"%s","amount":%d,"pool":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
+		`{"nftContract":"%s","entries":[{"tokenId":"%s","amount":%d,"stack":0}],"paymentToken":"%s","pricePerDraw":"1000","pricePerPack":"0","packDraws":[],"expirationBlock":0}`,
 		HostileNftID, tokenId, amount, TokenID)
 	res, _, _ := CallMarket(t, ct, "listBucket", []byte(payload), nil, seller, "", true, gas, "")
 	return ParseCreated(res).Id
@@ -1714,7 +1714,7 @@ func TestBucketEventsMirrorState(t *testing.T) {
 	MintAndApproveToken(t, ct, buyer, 100000)
 
 	// ---- listing: every commercial term plus the entries themselves ----
-	entries := bucketPoolEntriesJSON([][3]string{{"evcommon", "4", "0"}, {"evrare", "2", "1"}})
+	entries := bucketStackEntriesJSON([][3]string{{"evcommon", "4", "0"}, {"evrare", "2", "1"}})
 	payload := fmt.Sprintf(
 		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"1000","packDraws":[2,1],"expirationBlock":9999}`,
 		NftContractID, entries, TokenID)
@@ -1729,7 +1729,7 @@ func TestBucketEventsMirrorState(t *testing.T) {
 		`"expirationBlock":9999`,    // when it closes
 		`"feeBps":250`,              // fee snapshot taken at list time
 		`"royaltyBps":400`,          // royalty snapshot
-		`"entries":[{"tokenId":"evcommon","amount":4,"pool":0},{"tokenId":"evrare","amount":2,"pool":1}]`,
+		`"entries":[{"tokenId":"evcommon","amount":4,"stack":0},{"tokenId":"evrare","amount":2,"stack":1}]`,
 		`"entryCount":2`,
 		`"units":6`,
 	} {
@@ -1738,19 +1738,19 @@ func TestBucketEventsMirrorState(t *testing.T) {
 
 	// ---- restock: the added entries, not just a count ----
 	add := fmt.Sprintf(`{"bucketId":%d,"entries":%s}`, id,
-		bucketPoolEntriesJSON([][3]string{{"evextra", "2", "0"}}))
+		bucketStackEntriesJSON([][3]string{{"evextra", "2", "0"}}))
 	_, _, addLogs := CallMarket(t, ct, "addToBucket", []byte(add), nil, seller, "", true, gas, "")
 	AssertEventContains(t, addLogs, "bucket_restocked",
-		`"entries":[{"tokenId":"evextra","amount":2,"pool":0}]`)
+		`"entries":[{"tokenId":"evextra","amount":2,"stack":0}]`)
 	AssertEventContains(t, addLogs, "bucket_restocked", `"totalEntries":3`)
 	AssertEventContains(t, addLogs, "bucket_restocked", `"unitsAdded":2`)
 
-	// ---- purchase: which pool each draw came from, and what is left ----
+	// ---- purchase: which stack each draw came from, and what is left ----
 	pack := fmt.Sprintf(`{"bucketId":%d,"mode":"pack","quantity":1,"maxTotalPrice":""}`, id)
 	_, _, buyLogs := CallMarket(t, ct, "buyFromBucket", []byte(pack), nil, buyer, "", true, gas, "")
 
-	// A draw names its pool, so a mirror can decrement the right one.
-	AssertEventContains(t, buyLogs, "bucket_draw", `"pool":1`)
+	// A draw names its stack, so a mirror can decrement the right one.
+	AssertEventContains(t, buyLogs, "bucket_draw", `"stack":1`)
 	AssertEventContains(t, buyLogs, "bucket_purchase", `"paymentToken":"paytoken"`)
 	AssertEventContains(t, buyLogs, "bucket_purchase", `"paid":"1000"`)
 	// 8 units, a 3-card pack drawn: 5 left. unitsLeft lets a mirror reconcile
@@ -1758,25 +1758,25 @@ func TestBucketEventsMirrorState(t *testing.T) {
 	AssertEventContains(t, buyLogs, "bucket_purchase", `"unitsLeft":5`)
 	assert.Empty(t, FindEventsInLogs(buyLogs, "bucket_sold_out"), "still stock left")
 
-	// ---- a stale entry names its pool and how many units it took with it ----
+	// ---- a stale entry names its stack and how many units it took with it ----
 	away := fmt.Sprintf(`{"from":"%s","to":"hive:elsewhere","id":"evextra","amount":2,"data":""}`, seller)
 	CallNft(t, ct, "safeTransferFrom", []byte(away), nil, seller, true, gas, "")
 	_, _, dropLogs := CallMarket(t, ct, "buyFromBucket", []byte(pack), nil, buyer, "", true, gas, "")
 	if events := FindEventsInLogs(dropLogs, "bucket_entry_dropped"); len(events) > 0 {
 		AssertEventContains(t, dropLogs, "bucket_entry_dropped", `"tokenId":"evextra"`)
-		AssertEventContains(t, dropLogs, "bucket_entry_dropped", `"pool":0`)
+		AssertEventContains(t, dropLogs, "bucket_entry_dropped", `"stack":0`)
 		AssertEventContains(t, dropLogs, "bucket_entry_dropped", `"units":2`)
 	}
 
 	// ---- selling out closes the bucket, and SAYS SO ----
 	//
-	// On a SEPARATE single-pool bucket, because a bucket with guaranteed slots
-	// cannot reliably sell out at all: the guaranteed pool empties first and
+	// On a SEPARATE single-stack bucket, because a bucket with guaranteed slots
+	// cannot reliably sell out at all: the guaranteed stack empties first and
 	// strands whatever is left in the others. That is inherent to slot
-	// guarantees, and a good reason for a mirror to track units per pool rather
+	// guarantees, and a good reason for a mirror to track units per stack rather
 	// than assume a bucket drains evenly.
 	MintNft(t, ct, seller, "evflat", 4, 4)
-	flatEntries := bucketPoolEntriesJSON([][3]string{{"evflat", "4", "0"}})
+	flatEntries := bucketStackEntriesJSON([][3]string{{"evflat", "4", "0"}})
 	flatPayload := fmt.Sprintf(
 		`{"nftContract":"%s","entries":%s,"paymentToken":"%s","pricePerDraw":"0","pricePerPack":"1000","packDraws":[2],"expirationBlock":0}`,
 		NftContractID, flatEntries, TokenID)

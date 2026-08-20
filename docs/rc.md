@@ -61,7 +61,7 @@ For the small products the market side dominates. For the deck it flips:
 
 ## Pokémon booster box
 
-**Inventory:** 2 designs, 30 cards — `common` ×24 in pool 0, `rare` ×6 in pool 1
+**Inventory:** 2 designs, 30 cards — `common` ×24 in stack 0, `rare` ×6 in stack 1
 **Sold as:** packs of 5, `packDraws [4,1]` — 4 commons + 1 guaranteed rare. **5 cards per sale**
 **Supports:** 6 packs (limited by the 6 rares, one per pack)
 
@@ -70,7 +70,7 @@ For the small products the market side dominates. For the deck it flips:
 | seller | nft | mint 2 designs (24 + 6 copies) | 910 |
 | seller | nft | `setApprovalForAll` | 166 |
 | seller | | *NFT subtotal* | *1,076* |
-| seller | market | `listBucket` — 2 entries, 2 pools | 2,271 |
+| seller | market | `listBucket` — 2 entries, 2 stacks | 2,271 |
 | seller | | *market subtotal* | *2,271* |
 | seller | | **total to launch** | **3,347** |
 | buyer | market | open one pack (5 cards) | **2,937 – 3,033** |
@@ -81,7 +81,7 @@ Setup amortises to ~558 RC per pack across the six it supports.
 
 ## Raffle — one grand prize
 
-**Inventory:** 2 designs, 41 cards — `grandprize` ×1 and `consolation` ×40, both pool 0
+**Inventory:** 2 designs, 41 cards — `grandprize` ×1 and `consolation` ×40, both stack 0
 **Sold as:** ten-ticket strips, `packDraws [10]`. **10 tickets per sale**
 **Supports:** 4 strips
 
@@ -90,19 +90,19 @@ Setup amortises to ~558 RC per pack across the six it supports.
 | seller | nft | mint 2 designs (1 + 40 copies) | 883 |
 | seller | nft | `setApprovalForAll` | 166 |
 | seller | | *NFT subtotal* | *1,049* |
-| seller | market | `listBucket` — 2 entries, 1 pool | 2,123 |
+| seller | market | `listBucket` — 2 entries, 1 stack | 2,123 |
 | seller | | *market subtotal* | *2,123* |
 | seller | | **total to launch** | **3,172** |
 | buyer | market | draw a 10-ticket strip | **3,978 – 4,221** |
 
-One pool, so the jackpot is not slot-guaranteed — it is simply 1-in-41 per
+One stack, so the jackpot is not slot-guaranteed — it is simply 1-in-41 per
 ticket and cannot be won twice.
 
 ---
 
 ## Playing-card deck — 52 unique 1-of-1s
 
-**Inventory:** 52 designs, 52 cards — every card a 1-of-1, all in pool 0
+**Inventory:** 52 designs, 52 cards — every card a 1-of-1, all in stack 0
 **Sold as:** 13-card hands, `packDraws [13]`. **13 cards per sale**
 **Supports:** 4 hands (the whole deck)
 
@@ -132,8 +132,8 @@ splitting.
 
 ## Four-tier mystery pack
 
-**Inventory:** 4 designs, 38 cards — `common` ×20 (pool 0), `uncommon` ×12
-(pool 1), `holo` ×4 (pool 2), `secret` ×2 (pool 3)
+**Inventory:** 4 designs, 38 cards — `common` ×20 (stack 0), `uncommon` ×12
+(stack 1), `holo` ×4 (stack 2), `secret` ×2 (stack 3)
 **Sold as:** packs of 10, `packDraws [5,3,1,1]` — one slot per tier. **10 cards per sale**
 **Supports:** 2 packs (limited by the 2 secrets)
 
@@ -142,21 +142,21 @@ splitting.
 | seller | nft | mint 4 designs (20 + 12 + 4 + 2 copies) | 1,748 |
 | seller | nft | `setApprovalForAll` | 166 |
 | seller | | *NFT subtotal* | *1,914* |
-| seller | market | `listBucket` — 4 entries, 4 pools | 3,152 |
+| seller | market | `listBucket` — 4 entries, 4 stacks | 3,152 |
 | seller | | *market subtotal* | *3,152* |
 | seller | | **total to launch** | **5,066** |
 | buyer | market | open one pack (10 cards) | **4,453 – 4,485** |
 
-Four pools cost ~880 RC more to list than two, and ~1,470 more per pack than a
-5-card two-pool pack. Tiered guarantees are affordable.
+Four stacks cost ~880 RC more to list than two, and ~1,470 more per pack than a
+5-card two-stack pack. Tiered guarantees are affordable.
 
 ---
 
 ## Gachapon capsule machine
 
 **Inventory:** 3 designs, 121 capsules — `common` ×100, `rare` ×20, `chase` ×1,
-all in pool 0
-**Sold as:** single pulls only — no packs, no pools. **1 capsule per sale**
+all in stack 0
+**Sold as:** single pulls only — no packs, no stacks. **1 capsule per sale**
 **Supports:** 121 pulls (one per capsule)
 **Odds:** by unit weight. The chase is 1-in-121 per pull and nothing promises it
 
@@ -165,7 +165,7 @@ all in pool 0
 | seller | nft | mint 3 designs (100 + 20 + 1 copies) | 1,368 |
 | seller | nft | `setApprovalForAll` | 166 |
 | seller | | *NFT subtotal* | *1,534* |
-| seller | market | `listBucket` — 3 entries, 1 pool | 2,521 |
+| seller | market | `listBucket` — 3 entries, 1 stack | 2,521 |
 | seller | | **total to launch** | **4,055** |
 | buyer | market | one pull | **~1,961** |
 
@@ -178,7 +178,7 @@ of that. Per-pull pricing is a product decision that buyers pay for in RC.
 
 ## Art print drop — single or portfolio, with royalties
 
-**Inventory:** 3 plates, 30 prints — `dawn`/`dusk`/`noon` ×10 each, pool 0
+**Inventory:** 3 plates, 30 prints — `dawn`/`dusk`/`noon` ×10 each, stack 0
 **Sold as:** BOTH modes — one print for 5,000, or a 5-print portfolio for
 20,000 (the price of four). **1 or 5 prints per sale**
 **Supports:** 30 single prints, or 6 portfolios, or any mix
@@ -208,7 +208,7 @@ portfolio is better value for the buyer twice over: cheaper per print, and
 
 ## Flash drop with a deadline
 
-**Inventory:** 1 design, 12 shirts, pool 0
+**Inventory:** 1 design, 12 shirts, stack 0
 **Sold as:** single draws, `expirationBlock` 50 blocks out. **1 shirt per sale**
 **Supports:** 12 shirts, or however many sell before the deadline
 **Closes:** on the deadline, not on selling out
@@ -230,8 +230,8 @@ makes a timed drop safe to run.
 
 ## Loot crate shop — bulk buys and a live restock
 
-**Inventory:** 2 designs, 19 items to start — `common` ×16 (pool 0), `gold` ×3
-(pool 1); later restocked with 2 more designs, 5 more items
+**Inventory:** 2 designs, 19 items to start — `common` ×16 (stack 0), `gold` ×3
+(stack 1); later restocked with 2 more designs, 5 more items
 **Sold as:** crates of 4, `packDraws [3,1]` — 3 commons + 1 guaranteed gold.
 **4 items per sale**
 **Supports:** 3 crates (limited by the 3 golds), then 1 more after the restock
@@ -242,7 +242,7 @@ makes a timed drop safe to run.
 | seller | nft | mint 4 designs across two rounds | 1,764 |
 | seller | nft | `setApprovalForAll` | 166 |
 | seller | | *NFT subtotal* | *1,930* |
-| seller | market | `listBucket` — 2 entries, 2 pools | 2,187 |
+| seller | market | `listBucket` — 2 entries, 2 stacks | 2,187 |
 | seller | market | `addToBucket` — restock a live bucket | 1,199 |
 | seller | | *market subtotal* | *3,386* |
 | seller | | **total to launch + restock** | **5,316** |
@@ -263,11 +263,11 @@ is what a real shop does anyway.
 
 | inventory | contract | operation | RC |
 |---|---|---|---:|
-| **500 designs, 500 cards** (1 pool)<br>1 card or 10 per sale → 500 or 50 sales | nft | mint 500 ids, 25 `mintBatch` calls | ~135,000 |
+| **500 designs, 500 cards** (1 stack)<br>1 card or 10 per sale → 500 or 50 sales | nft | mint 500 ids, 25 `mintBatch` calls | ~135,000 |
 | | market | stocking, 21 calls | ~128,000 |
 | | market | one single draw | 2,738 |
 | | market | one 10-card pack | 9,001 |
-| **2 designs, 500 cards** (450 + 50, 2 pools)<br>10 per sale → 50 sales | nft | mint 2 designs | ~900 |
+| **2 designs, 500 cards** (450 + 50, 2 stacks)<br>10 per sale → 50 sales | nft | mint 2 designs | ~900 |
 | | market | `listBucket`, 1 call | 2,152 |
 | | market | one 10-card pack | 3,916 |
 
