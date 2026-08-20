@@ -637,6 +637,14 @@ type SweepPayload struct {
 	NftContract string   `json:"nftContract"`
 	ListingIds  []uint64 `json:"listingIds"`
 	MaxTotal    string   `json:"maxTotal"`
+	// The one asset this sweep spends. MaxTotal is a bare integer with no
+	// currency of its own, so without pinning the token every listing is
+	// paid in, the cap would compare a sum of different currencies against
+	// a number that belongs to none of them. Empty is still accepted and
+	// means "whatever the first listing is priced in" — old callers that
+	// only ever swept a single token keep working, and the ones that mixed
+	// tokens now abort, which is the point.
+	PaymentToken string `json:"paymentToken"`
 }
 
 type SweptEvent struct {
@@ -649,6 +657,9 @@ type SweptAttributes struct {
 	Buyer string `json:"buyer"`
 	Count uint64 `json:"count"`
 	Total string `json:"total"`
+	// Which asset Total is denominated in. Without it the number is not
+	// interpretable by anything downstream — the indexer included.
+	PaymentToken string `json:"paymentToken"`
 }
 
 // ===================================

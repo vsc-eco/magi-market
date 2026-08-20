@@ -337,11 +337,11 @@ func emitCollectionFeeCleared(nftContract string) {
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitSwept(buyer string, count uint64, total string) {
+func emitSwept(buyer string, count uint64, total string, paymentToken string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := SweptEvent{
 		Type:       "swept",
-		Attributes: SweptAttributes{Buyer: buyer, Count: count, Total: total},
+		Attributes: SweptAttributes{Buyer: buyer, Count: count, Total: total, PaymentToken: paymentToken},
 		Tx:         *txID,
 	}
 	w := jwriter.Writer{}

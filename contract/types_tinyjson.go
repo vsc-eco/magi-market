@@ -6674,7 +6674,7 @@ func (v CollectionFeeClearedEvent) MarshalTinyJSON(w *jwriter.Writer) {
 
 // ---- hand-added (sub-project C2): floor sweep structs ----
 
-// SweepPayload decode (input: nftContract string, listingIds []uint64 array, maxTotal string)
+// SweepPayload decode (input: nftContract string, listingIds []uint64 array, maxTotal string, paymentToken string)
 func tinyjsonC2DecodeSweepPayload(in *jlexer.Lexer, out *SweepPayload) {
 	isTopLevel := in.IsStart()
 	if in.IsNull() {
@@ -6721,6 +6721,8 @@ func tinyjsonC2DecodeSweepPayload(in *jlexer.Lexer, out *SweepPayload) {
 			}
 		case "maxTotal":
 			out.MaxTotal = string(in.String())
+		case "paymentToken":
+			out.PaymentToken = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -6762,6 +6764,11 @@ func tinyjsonC2EncodeSweptEvent(out *jwriter.Writer, in SweptEvent) {
 			const p2 string = ",\"total\":"
 			out.RawString(p2)
 			out.String(string(in.Attributes.Total))
+		}
+		{
+			const p2 string = ",\"paymentToken\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.PaymentToken))
 		}
 		out.RawByte('}')
 	}

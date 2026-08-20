@@ -1285,6 +1285,19 @@ func Sweep(payload *string) *string {
 
 	maxTotal := parseMoney(p.MaxTotal)
 
+	// A sweep spends ONE asset. Money here is a bare integer with no currency
+	// attached (see parseMoney), while each buy escrows in whatever token its
+	// own listing was priced in — so without this, the loop below would add
+	// prices denominated in different currencies into a single `total`,
+	// compare that to a cap belonging to none of them, and then pull every
+	// one of those assets. The cap would look like a budget and bound
+	// nothing. Callers that omit paymentToken get the first listing's, which
+	// keeps single-token sweeps working and turns mixed ones into an abort.
+	payToken := p.PaymentToken
+	if payToken == "" {
+		payToken = getListingField(p.ListingIds[0], "pt")
+	}
+
 	// FIRST PASS: validate all listings and accumulate total cost.
 	total := mZero()
 	for _, id := range p.ListingIds {
@@ -1296,6 +1309,9 @@ func Sweep(payload *string) *string {
 		}
 		if getListingField(id, "nc") != p.NftContract {
 			sdk.Abort("Listing not in collection")
+		}
+		if getListingField(id, "pt") != payToken {
+			sdk.Abort("Listing not in payment token")
 		}
 		cost := mMulU64(getListingMoney(id, "p"), getListingUint64(id, "a"))
 		total = mAdd(total, cost)
@@ -1310,7 +1326,7 @@ func Sweep(payload *string) *string {
 		doBuy(caller, &BuyPayload{ListingId: id, Amount: getListingUint64(id, "a")})
 	}
 
-	emitSwept(caller, uint64(len(p.ListingIds)), formatMoney(total))
+	emitSwept(caller, uint64(len(p.ListingIds)), formatMoney(total), payToken)
 	return jsonResponse(&SuccessResponse{Success: true})
 }
 
