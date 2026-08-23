@@ -777,6 +777,12 @@ const MaxDrawWork = 600
 // holo / rare); eight leaves room without letting a pack become unbounded.
 const MaxBucketStacks = 8
 
+// MaxBucketNameLen bounds the seller's display name. Long enough for a real
+// product title, short enough that it cannot be used to bloat state or an
+// event log. Bytes, not runes — the cap is about storage, and a multi-byte
+// name simply gets fewer characters.
+const MaxBucketNameLen = 64
+
 // BucketEntry is one already-minted token id and how many units of it are in
 // the bucket. Amount > 1 is how editions are stocked: each unit is a separate
 // prize, so an entry with 50 units is 50x likelier to be drawn than a 1/1.
@@ -803,6 +809,10 @@ type BucketEntry struct {
 //
 // Single draws always come from stack 0.
 type ListBucketPayload struct {
+	// Optional display name — "Base Set Booster", not "#0". The contract
+	// never reads it; it exists so every client shows the seller's name for
+	// the sale instead of an auto-incrementing id.
+	Name            string        `json:"name"`
 	NftContract     string        `json:"nftContract"`
 	Entries         []BucketEntry `json:"entries"`
 	PaymentToken    string        `json:"paymentToken"`
@@ -867,6 +877,7 @@ type BucketListedEvent struct {
 // the same way.
 type BucketListedAttributes struct {
 	BucketId         uint64        `json:"bucketId"`
+	Name             string        `json:"name"`
 	Seller           string        `json:"seller"`
 	NftContract      string        `json:"nftContract"`
 	PaymentToken     string        `json:"paymentToken"`

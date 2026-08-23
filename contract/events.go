@@ -537,14 +537,14 @@ func emitRentalDelisted(rentalId uint64, owner string) {
 // Bucket Events (random-draw sales)
 // ===================================
 
-func emitBucketListed(bucketId uint64, seller, nftContract, paymentToken, pricePerDraw, pricePerPack string,
+func emitBucketListed(bucketId uint64, name string, seller, nftContract, paymentToken, pricePerDraw, pricePerPack string,
 	packDraws []uint64, expirationBlock, feeBps, royaltyBps uint64, royaltyRecipient string,
 	entries []BucketEntry, units uint64) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := BucketListedEvent{
 		Type: "bucket_listed",
 		Attributes: BucketListedAttributes{
-			BucketId: bucketId, Seller: seller, NftContract: nftContract,
+			BucketId: bucketId, Name: name, Seller: seller, NftContract: nftContract,
 			PaymentToken: paymentToken, PricePerDraw: pricePerDraw, PricePerPack: pricePerPack,
 			PackDraws: packDraws, ExpirationBlock: expirationBlock,
 			FeeBps: feeBps, RoyaltyBps: royaltyBps, RoyaltyRecipient: royaltyRecipient,

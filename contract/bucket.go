@@ -455,7 +455,20 @@ func ListBucket(payload *string) *string {
 		sdk.Abort("Combined fee and royalty exceed 100%")
 	}
 
+	// The name is never read by the contract, but it is echoed in an event
+	// and stored, so it has to be bounded and free of control bytes that
+	// would corrupt a log line or a terminal reading one.
+	if len(p.Name) > MaxBucketNameLen {
+		sdk.Abort("Name too long")
+	}
+	for i := 0; i < len(p.Name); i++ {
+		if p.Name[i] < 0x20 || p.Name[i] == 0x7f {
+			sdk.Abort("Name contains control characters")
+		}
+	}
+
 	id := getNextBucketId()
+	setBucketField(id, "nm", p.Name)
 	setBucketField(id, "s", caller)
 	setBucketField(id, "nc", p.NftContract)
 	setBucketField(id, "pt", p.PaymentToken)
@@ -477,7 +490,7 @@ func ListBucket(payload *string) *string {
 	snapshotRoyaltySplitsForBucket(id, snapRecips, snapBps)
 	setNextBucketId(id + 1)
 
-	emitBucketListed(id, caller, p.NftContract, p.PaymentToken,
+	emitBucketListed(id, p.Name, caller, p.NftContract, p.PaymentToken,
 		formatMoney(priceSingle), formatMoney(pricePack), p.PackDraws, p.ExpirationBlock,
 		feeBps, royaltyBps, getRoyaltyRecipient(p.NftContract), p.Entries, units)
 	return jsonResponse(&CreatedResponse{Success: true, Id: id})

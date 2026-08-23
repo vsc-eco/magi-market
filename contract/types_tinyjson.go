@@ -8475,6 +8475,8 @@ func tinyjsonC3DecodeListBucketPayload(in *jlexer.Lexer, out *ListBucketPayload)
 			continue
 		}
 		switch key {
+		case "name":
+			out.Name = string(in.String())
 		case "nftContract":
 			out.NftContract = string(in.String())
 		case "paymentToken":
@@ -8805,6 +8807,11 @@ func tinyjsonC3EncodeBucketListedEvent(out *jwriter.Writer, in BucketListedEvent
 			const p2 string = ",\"bucketId\":"
 			out.RawString(p2[1:])
 			out.Uint64(uint64(in.Attributes.BucketId))
+		}
+		{
+			const p2 string = ",\"name\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Name))
 		}
 		{
 			const p2 string = ",\"seller\":"
