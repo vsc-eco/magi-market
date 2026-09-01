@@ -6674,7 +6674,7 @@ func (v CollectionFeeClearedEvent) MarshalTinyJSON(w *jwriter.Writer) {
 
 // ---- hand-added (sub-project C2): floor sweep structs ----
 
-// SweepPayload decode (input: nftContract string, listingIds []uint64 array, maxTotal string)
+// SweepPayload decode (input: nftContract string, listingIds []uint64 array, maxTotal string, paymentToken string)
 func tinyjsonC2DecodeSweepPayload(in *jlexer.Lexer, out *SweepPayload) {
 	isTopLevel := in.IsStart()
 	if in.IsNull() {
@@ -6721,6 +6721,8 @@ func tinyjsonC2DecodeSweepPayload(in *jlexer.Lexer, out *SweepPayload) {
 			}
 		case "maxTotal":
 			out.MaxTotal = string(in.String())
+		case "paymentToken":
+			out.PaymentToken = string(in.String())
 		default:
 			in.SkipRecursive()
 		}
@@ -6762,6 +6764,11 @@ func tinyjsonC2EncodeSweptEvent(out *jwriter.Writer, in SweptEvent) {
 			const p2 string = ",\"total\":"
 			out.RawString(p2)
 			out.String(string(in.Attributes.Total))
+		}
+		{
+			const p2 string = ",\"paymentToken\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.PaymentToken))
 		}
 		out.RawByte('}')
 	}
@@ -8399,4 +8406,728 @@ func tinyjsonTkEncodeTokenListingResponse(out *jwriter.Writer, in TokenListingRe
 
 func (v TokenListingResponse) MarshalTinyJSON(w *jwriter.Writer) {
 	tinyjsonTkEncodeTokenListingResponse(w, v)
+}
+
+// ===================================
+// Bucket payloads + events (HAND-WRITTEN — see the file header)
+// ===================================
+//
+// Decoders for the payloads (only ever unmarshaled) and encoders for the events
+// (only ever marshaled), following the existing ListBundlePayload /
+// BundleListedEvent fragments exactly.
+
+func tinyjsonC3DecodeBucketEntry(in *jlexer.Lexer, out *BucketEntry) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "tokenId":
+			out.TokenId = string(in.String())
+		case "amount":
+			out.Amount = uint64(in.Uint64())
+		case "stack":
+			out.Stack = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *BucketEntry) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonC3DecodeBucketEntry(l, v)
+}
+
+func tinyjsonC3DecodeListBucketPayload(in *jlexer.Lexer, out *ListBucketPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "name":
+			out.Name = string(in.String())
+		case "nftContract":
+			out.NftContract = string(in.String())
+		case "paymentToken":
+			out.PaymentToken = string(in.String())
+		case "pricePerDraw":
+			out.PricePerDraw = string(in.String())
+		case "pricePerPack":
+			out.PricePerPack = string(in.String())
+		case "packDraws":
+			if in.IsNull() {
+				in.Skip()
+				out.PackDraws = nil
+			} else {
+				in.Delim('[')
+				if out.PackDraws == nil {
+					if !in.IsDelim(']') {
+						out.PackDraws = make([]uint64, 0, 4)
+					} else {
+						out.PackDraws = []uint64{}
+					}
+				} else {
+					out.PackDraws = (out.PackDraws)[:0]
+				}
+				for !in.IsDelim(']') {
+					var v2 uint64
+					v2 = uint64(in.Uint64())
+					out.PackDraws = append(out.PackDraws, v2)
+					in.WantComma()
+				}
+				in.Delim(']')
+			}
+		case "expirationBlock":
+			out.ExpirationBlock = uint64(in.Uint64())
+		case "entries":
+			if in.IsNull() {
+				in.Skip()
+				out.Entries = nil
+			} else {
+				in.Delim('[')
+				if out.Entries == nil {
+					if !in.IsDelim(']') {
+						out.Entries = make([]BucketEntry, 0, 0)
+					} else {
+						out.Entries = []BucketEntry{}
+					}
+				} else {
+					out.Entries = (out.Entries)[:0]
+				}
+				for !in.IsDelim(']') {
+					var v1 BucketEntry
+					(v1).UnmarshalTinyJSON(in)
+					out.Entries = append(out.Entries, v1)
+					in.WantComma()
+				}
+				in.Delim(']')
+			}
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *ListBucketPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonC3DecodeListBucketPayload(l, v)
+}
+
+func tinyjsonC3DecodeBuyFromBucketPayload(in *jlexer.Lexer, out *BuyFromBucketPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "bucketId":
+			out.BucketId = uint64(in.Uint64())
+		case "mode":
+			out.Mode = string(in.String())
+		case "quantity":
+			out.Quantity = uint64(in.Uint64())
+		case "maxTotalPrice":
+			out.MaxTotalPrice = string(in.String())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *BuyFromBucketPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonC3DecodeBuyFromBucketPayload(l, v)
+}
+
+func tinyjsonC3DecodeBucketIdPayload(in *jlexer.Lexer, out *BucketIdPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "bucketId":
+			out.BucketId = uint64(in.Uint64())
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *BucketIdPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonC3DecodeBucketIdPayload(l, v)
+}
+
+func tinyjsonC3DecodeAddToBucketPayload(in *jlexer.Lexer, out *AddToBucketPayload) {
+	isTopLevel := in.IsStart()
+	if in.IsNull() {
+		if isTopLevel {
+			in.Consumed()
+		}
+		in.Skip()
+		return
+	}
+	in.Delim('{')
+	for !in.IsDelim('}') {
+		key := in.UnsafeFieldName(false)
+		in.WantColon()
+		if in.IsNull() {
+			in.Skip()
+			in.WantComma()
+			continue
+		}
+		switch key {
+		case "bucketId":
+			out.BucketId = uint64(in.Uint64())
+		case "entries":
+			if in.IsNull() {
+				in.Skip()
+				out.Entries = nil
+			} else {
+				in.Delim('[')
+				if out.Entries == nil {
+					if !in.IsDelim(']') {
+						out.Entries = make([]BucketEntry, 0, 0)
+					} else {
+						out.Entries = []BucketEntry{}
+					}
+				} else {
+					out.Entries = (out.Entries)[:0]
+				}
+				for !in.IsDelim(']') {
+					var v1 BucketEntry
+					(v1).UnmarshalTinyJSON(in)
+					out.Entries = append(out.Entries, v1)
+					in.WantComma()
+				}
+				in.Delim(']')
+			}
+		default:
+			in.SkipRecursive()
+		}
+		in.WantComma()
+	}
+	in.Delim('}')
+	if isTopLevel {
+		in.Consumed()
+	}
+}
+
+func (v *AddToBucketPayload) UnmarshalTinyJSON(l *jlexer.Lexer) {
+	tinyjsonC3DecodeAddToBucketPayload(l, v)
+}
+
+func tinyjsonC3EncodeBucketRestockedEvent(out *jwriter.Writer, in BucketRestockedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"bucketId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.BucketId))
+		}
+		{
+			const p2 string = ",\"seller\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Seller))
+		}
+		{
+			const p2 string = ",\"entries\":"
+			out.RawString(p2)
+			writeBucketEntries(out, in.Attributes.Entries)
+		}
+		{
+			const p2 string = ",\"added\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Added))
+		}
+		{
+			const p2 string = ",\"totalEntries\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.TotalEntries))
+		}
+		{
+			const p2 string = ",\"unitsAdded\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.UnitsAdded))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v BucketRestockedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBucketRestockedEvent(w, v)
+}
+
+// BucketEntry gains an ENCODER (it previously only decoded, being an input
+// type) so bucket events can carry their entries and an indexer can mirror a
+// bucket's contents from the log alone.
+func tinyjsonC3EncodeBucketEntry(out *jwriter.Writer, in BucketEntry) {
+	out.RawByte('{')
+	{
+		const p2 string = ",\"tokenId\":"
+		out.RawString(p2[1:])
+		out.String(string(in.TokenId))
+	}
+	{
+		const p2 string = ",\"amount\":"
+		out.RawString(p2)
+		out.Uint64(uint64(in.Amount))
+	}
+	{
+		const p2 string = ",\"stack\":"
+		out.RawString(p2)
+		out.Uint64(uint64(in.Stack))
+	}
+	out.RawByte('}')
+}
+
+func (v BucketEntry) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBucketEntry(w, v)
+}
+
+// writeBucketEntries emits an entries array, or [] when empty — never null,
+// because a consumer that has to special-case null for "no entries" will
+// eventually forget to.
+func writeBucketEntries(out *jwriter.Writer, entries []BucketEntry) {
+	out.RawByte('[')
+	for i, e := range entries {
+		if i > 0 {
+			out.RawByte(',')
+		}
+		(e).MarshalTinyJSON(out)
+	}
+	out.RawByte(']')
+}
+
+func writeUint64Array(out *jwriter.Writer, xs []uint64) {
+	out.RawByte('[')
+	for i, x := range xs {
+		if i > 0 {
+			out.RawByte(',')
+		}
+		out.Uint64(x)
+	}
+	out.RawByte(']')
+}
+
+func tinyjsonC3EncodeBucketListedEvent(out *jwriter.Writer, in BucketListedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"bucketId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.BucketId))
+		}
+		{
+			const p2 string = ",\"name\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Name))
+		}
+		{
+			const p2 string = ",\"seller\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Seller))
+		}
+		{
+			const p2 string = ",\"nftContract\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.NftContract))
+		}
+		{
+			const p2 string = ",\"paymentToken\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.PaymentToken))
+		}
+		{
+			const p2 string = ",\"pricePerDraw\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.PricePerDraw))
+		}
+		{
+			const p2 string = ",\"pricePerPack\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.PricePerPack))
+		}
+		{
+			const p2 string = ",\"packDraws\":"
+			out.RawString(p2)
+			writeUint64Array(out, in.Attributes.PackDraws)
+		}
+		{
+			const p2 string = ",\"expirationBlock\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.ExpirationBlock))
+		}
+		{
+			const p2 string = ",\"feeBps\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.FeeBps))
+		}
+		{
+			const p2 string = ",\"royaltyBps\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.RoyaltyBps))
+		}
+		{
+			const p2 string = ",\"royaltyRecipient\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.RoyaltyRecipient))
+		}
+		{
+			const p2 string = ",\"entries\":"
+			out.RawString(p2)
+			writeBucketEntries(out, in.Attributes.Entries)
+		}
+		{
+			const p2 string = ",\"entryCount\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.EntryCount))
+		}
+		{
+			const p2 string = ",\"units\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Units))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v BucketListedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBucketListedEvent(w, v)
+}
+
+func tinyjsonC3EncodeBucketDrawEvent(out *jwriter.Writer, in BucketDrawEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"bucketId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.BucketId))
+		}
+		{
+			const p2 string = ",\"buyer\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Buyer))
+		}
+		{
+			const p2 string = ",\"tokenId\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.TokenId))
+		}
+		{
+			const p2 string = ",\"stack\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Stack))
+		}
+		{
+			const p2 string = ",\"drawIndex\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.DrawIndex))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v BucketDrawEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBucketDrawEvent(w, v)
+}
+
+func tinyjsonC3EncodeBucketPurchaseEvent(out *jwriter.Writer, in BucketPurchaseEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"bucketId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.BucketId))
+		}
+		{
+			const p2 string = ",\"buyer\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Buyer))
+		}
+		{
+			const p2 string = ",\"mode\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Mode))
+		}
+		{
+			const p2 string = ",\"draws\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Draws))
+		}
+		{
+			const p2 string = ",\"paymentToken\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.PaymentToken))
+		}
+		{
+			const p2 string = ",\"paid\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Paid))
+		}
+		{
+			const p2 string = ",\"fee\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Fee))
+		}
+		{
+			const p2 string = ",\"royalty\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Royalty))
+		}
+		{
+			const p2 string = ",\"unitsLeft\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.UnitsLeft))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v BucketPurchaseEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBucketPurchaseEvent(w, v)
+}
+
+func tinyjsonC3EncodeBucketEntryDroppedEvent(out *jwriter.Writer, in BucketEntryDroppedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"bucketId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.BucketId))
+		}
+		{
+			const p2 string = ",\"tokenId\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.TokenId))
+		}
+		{
+			const p2 string = ",\"stack\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Stack))
+		}
+		{
+			const p2 string = ",\"units\":"
+			out.RawString(p2)
+			out.Uint64(uint64(in.Attributes.Units))
+		}
+		{
+			const p2 string = ",\"reason\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Reason))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v BucketEntryDroppedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBucketEntryDroppedEvent(w, v)
+}
+
+func tinyjsonC3EncodeBucketDelistedEvent(out *jwriter.Writer, in BucketDelistedEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"bucketId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.BucketId))
+		}
+		{
+			const p2 string = ",\"seller\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Seller))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v BucketDelistedEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBucketDelistedEvent(w, v)
+}
+
+func tinyjsonC3EncodeBucketSoldOutEvent(out *jwriter.Writer, in BucketSoldOutEvent) {
+	out.RawByte('{')
+	{
+		const prefix string = ",\"type\":"
+		out.RawString(prefix[1:])
+		out.String(string(in.Type))
+	}
+	{
+		const prefix string = ",\"attributes\":"
+		out.RawString(prefix)
+		out.RawByte('{')
+		{
+			const p2 string = ",\"bucketId\":"
+			out.RawString(p2[1:])
+			out.Uint64(uint64(in.Attributes.BucketId))
+		}
+		{
+			const p2 string = ",\"seller\":"
+			out.RawString(p2)
+			out.String(string(in.Attributes.Seller))
+		}
+		out.RawByte('}')
+	}
+	{
+		const prefix string = ",\"tx\":"
+		out.RawString(prefix)
+		out.String(string(in.Tx))
+	}
+	out.RawByte('}')
+}
+
+func (v BucketSoldOutEvent) MarshalTinyJSON(w *jwriter.Writer) {
+	tinyjsonC3EncodeBucketSoldOutEvent(w, v)
 }

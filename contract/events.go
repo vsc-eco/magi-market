@@ -337,11 +337,11 @@ func emitCollectionFeeCleared(nftContract string) {
 	sdk.Log(string(w.Buffer.BuildBytes()))
 }
 
-func emitSwept(buyer string, count uint64, total string) {
+func emitSwept(buyer string, count uint64, total string, paymentToken string) {
 	txID := sdk.GetEnvKey("tx.id")
 	event := SweptEvent{
 		Type:       "swept",
-		Attributes: SweptAttributes{Buyer: buyer, Count: count, Total: total},
+		Attributes: SweptAttributes{Buyer: buyer, Count: count, Total: total, PaymentToken: paymentToken},
 		Tx:         *txID,
 	}
 	w := jwriter.Writer{}
@@ -527,6 +527,114 @@ func emitRentalDelisted(rentalId uint64, owner string) {
 		Type:       "rentalDelisted",
 		Attributes: RentalDelistedAttributes{RentalId: rentalId, Owner: owner},
 		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+// ===================================
+// Bucket Events (random-draw sales)
+// ===================================
+
+func emitBucketListed(bucketId uint64, name string, seller, nftContract, paymentToken, pricePerDraw, pricePerPack string,
+	packDraws []uint64, expirationBlock, feeBps, royaltyBps uint64, royaltyRecipient string,
+	entries []BucketEntry, units uint64) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BucketListedEvent{
+		Type: "bucket_listed",
+		Attributes: BucketListedAttributes{
+			BucketId: bucketId, Name: name, Seller: seller, NftContract: nftContract,
+			PaymentToken: paymentToken, PricePerDraw: pricePerDraw, PricePerPack: pricePerPack,
+			PackDraws: packDraws, ExpirationBlock: expirationBlock,
+			FeeBps: feeBps, RoyaltyBps: royaltyBps, RoyaltyRecipient: royaltyRecipient,
+			Entries: entries, EntryCount: uint64(len(entries)), Units: units,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitBucketRestocked(bucketId uint64, seller string, entries []BucketEntry, totalEntries, unitsAdded uint64) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BucketRestockedEvent{
+		Type: "bucket_restocked",
+		Attributes: BucketRestockedAttributes{
+			BucketId: bucketId, Seller: seller, Entries: entries,
+			Added: uint64(len(entries)), TotalEntries: totalEntries, UnitsAdded: unitsAdded,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitBucketDraw(bucketId uint64, buyer, tokenId string, stack, drawIndex uint64) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BucketDrawEvent{
+		Type: "bucket_draw",
+		Attributes: BucketDrawAttributes{
+			BucketId: bucketId, Buyer: buyer, TokenId: tokenId, Stack: stack, DrawIndex: drawIndex,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitBucketPurchase(bucketId uint64, buyer, mode string, draws uint64, paymentToken, paid, fee, royalty string, unitsLeft uint64) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BucketPurchaseEvent{
+		Type: "bucket_purchase",
+		Attributes: BucketPurchaseAttributes{
+			BucketId: bucketId, Buyer: buyer, Mode: mode, Draws: draws,
+			PaymentToken: paymentToken, Paid: paid, Fee: fee, Royalty: royalty, UnitsLeft: unitsLeft,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitBucketEntryDropped(bucketId uint64, tokenId string, stack, units uint64, reason string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BucketEntryDroppedEvent{
+		Type: "bucket_entry_dropped",
+		Attributes: BucketEntryDroppedAttributes{
+			BucketId: bucketId, TokenId: tokenId, Stack: stack, Units: units, Reason: reason,
+		},
+		Tx: *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitBucketSoldOut(bucketId uint64, seller string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BucketSoldOutEvent{
+		Type:       "bucket_sold_out",
+		Attributes: BucketSoldOutAttributes{BucketId: bucketId, Seller: seller},
+		Tx:         *txID,
+	}
+	w := jwriter.Writer{}
+	event.MarshalTinyJSON(&w)
+	sdk.Log(string(w.Buffer.BuildBytes()))
+}
+
+func emitBucketDelisted(bucketId uint64, seller string) {
+	txID := sdk.GetEnvKey("tx.id")
+	event := BucketDelistedEvent{
+		Type: "bucket_delisted",
+		Attributes: BucketDelistedAttributes{
+			BucketId: bucketId, Seller: seller,
+		},
+		Tx: *txID,
 	}
 	w := jwriter.Writer{}
 	event.MarshalTinyJSON(&w)

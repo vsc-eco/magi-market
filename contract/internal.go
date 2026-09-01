@@ -2,8 +2,8 @@ package main
 
 import (
 	"encoding/binary"
-	"math/big"
 	"magi_market/sdk"
+	"math/big"
 	"strconv"
 
 	"github.com/CosmWasm/tinyjson/jwriter"
@@ -18,6 +18,20 @@ func safeSub(a, b uint64) uint64 {
 		sdk.Abort("safeSub underflow")
 	}
 	return a - b
+}
+
+func safeAdd(a, b uint64) uint64 {
+	if a+b < a {
+		sdk.Abort("safeAdd overflow")
+	}
+	return a + b
+}
+
+func safeMul(a, b uint64) uint64 {
+	if a != 0 && b > ^uint64(0)/a {
+		sdk.Abort("safeMul overflow")
+	}
+	return a * b
 }
 
 // ===================================
@@ -469,6 +483,259 @@ func getNextBundleId() uint64 {
 
 func setNextBundleId(id uint64) {
 	setUint64State("nxt_bnd", id)
+}
+
+// ===================================
+// Bucket State Helpers (random-draw sales)
+// ===================================
+//
+// A bucket is a stack of already-minted NFT units from ONE collection, sold at
+// a fixed price where the CONTRACT picks which unit the buyer receives.
+//
+// Entries are stored as PER-STACK SLOT ARRAYS with chunked unit sums. The
+// original layout was one flat array plus a `_pl` stack tag per entry, which
+// forced every draw to read and scan all of it: a draw was O(entries), so a
+// bucket of a few hundred cards could not be drawn from inside the default
+// rcLimit at all — the purchase died before it could pay anyone.
+//
+// Splitting by stack means a draw never looks at entries it could not have
+// picked, and the chunk sums mean it does not look at most of the ones it
+// could: walk the chunk sums to find which chunk holds the chosen unit, then
+// scan only that chunk. Work per draw is `slots/BucketChunk + BucketChunk`
+// instead of `slots`.
+//
+//	bkt|<id>|s          seller
+//	bkt|<id>|nc         nft contract (one per bucket, like bundles)
+//	bkt|<id>|pt         payment token
+//	bkt|<id>|ps         draws per pack
+//	bkt|<id>|p1         price for a single draw   ("" / zero = single sales off)
+//	bkt|<id>|pp         price for one pack        ("" / zero = pack sales off)
+//	bkt|<id>|act        active flag
+//	bkt|<id>|exp        expiration block
+//	bkt|<id>|n          entry count, all stacks    (cap: MaxBucketEntries)
+//	bkt|<id>|u          units remaining, all stacks
+//	bkt|<id>|np         number of stacks in use
+//	bkt|<id>|e<k>n      slot count in stack k
+//	bkt|<id>|e<k>u      units remaining in stack k
+//	bkt|<id>|e<k>c<j>   units remaining in chunk j of stack k
+//	bkt|<id>|e<k>_<i>   slot i of stack k, packed "<units>:<tokenId>"
+//	bkt|<id>|h|<tid>    presence marker, so a duplicate id costs one read
+//	bkt|<id>|fb|rb|rr   fee/royalty snapshot, as bundles
+//	bkt|<id>|rs_*       resolved royalty split snapshot
+//
+// `n`, `u`, `e<k>n`, `e<k>u` and the chunk sums are all MAINTAINED rather than
+// derived. Deriving them was the honest choice when they could not drift — a
+// scan cannot disagree with itself — but a scan is exactly what this layout
+// exists to avoid. Every mutation goes through the helpers below so the
+// bookkeeping stays in one place.
+//
+// Entries hold already-minted units only: the seller keeps custody and the
+// market moves a unit seller->buyer per draw, exactly like a listing.
+
+func bucketKey(id uint64, field string) string {
+	return "bkt|" + strconv.FormatUint(id, 10) + "|" + field
+}
+
+func setBucketField(id uint64, field, value string) {
+	sdk.StateSetObject(bucketKey(id, field), value)
+}
+
+func getBucketField(id uint64, field string) string {
+	return getStringState(bucketKey(id, field))
+}
+
+func getBucketUint64(id uint64, field string) uint64 {
+	return getUint64State(bucketKey(id, field))
+}
+
+func setBucketUint64(id uint64, field string, val uint64) {
+	setUint64State(bucketKey(id, field), val)
+}
+
+func isBucketActive(id uint64) bool {
+	return getBucketField(id, "act") == "1"
+}
+
+func getNextBucketId() uint64 {
+	return getUint64State("nxt_bkt")
+}
+
+func setNextBucketId(id uint64) {
+	setUint64State("nxt_bkt", id)
+}
+
+// ---- Slot addressing --------------------------------------------------
+
+func stackPrefix(stack uint64) string {
+	return "e" + strconv.FormatUint(stack, 10)
+}
+
+func slotField(stack, idx uint64) string {
+	return stackPrefix(stack) + "_" + strconv.FormatUint(idx, 10)
+}
+
+func chunkField(stack, chunk uint64) string {
+	return stackPrefix(stack) + "c" + strconv.FormatUint(chunk, 10)
+}
+
+// packSlot stores units and token id in ONE state value. Splitting them across
+// two keys doubled both the write cost of stocking and the read cost of the
+// in-chunk scan, for two values that are always wanted together.
+//
+// The units come FIRST and are decimal, so the separator is the first ':' —
+// which matters because a tokenId may itself contain ':' (assertValidTokenId
+// allows it, and namespaced ids use it).
+func packSlot(units uint64, tokenId string) string {
+	return strconv.FormatUint(units, 10) + ":" + tokenId
+}
+
+func unpackSlot(s string) (uint64, string) {
+	for i := 0; i < len(s); i++ {
+		if s[i] == ':' {
+			u, err := strconv.ParseUint(s[:i], 10, 64)
+			if err != nil {
+				return 0, ""
+			}
+			return u, s[i+1:]
+		}
+	}
+	return 0, ""
+}
+
+func getBucketSlot(id, stack, idx uint64) (uint64, string) {
+	return unpackSlot(getBucketField(id, slotField(stack, idx)))
+}
+
+func setBucketSlot(id, stack, idx, units uint64, tokenId string) {
+	setBucketField(id, slotField(stack, idx), packSlot(units, tokenId))
+}
+
+// ---- Counters ---------------------------------------------------------
+
+func bucketUnitsRemaining(id uint64) uint64 {
+	return getBucketUint64(id, "u")
+}
+
+// bucketStackUnits is what makes a pack's guarantee checkable: a pack promising
+// a rare must be able to fill that slot from the rare stack specifically, so the
+// grand total is not a sufficient check.
+func bucketStackUnits(id, stack uint64) uint64 {
+	return getBucketUint64(id, stackPrefix(stack)+"u")
+}
+
+func bucketStackSlots(id, stack uint64) uint64 {
+	return getBucketUint64(id, stackPrefix(stack)+"n")
+}
+
+// hasBucketToken answers "is this token id already stocked" in one read.
+//
+// The alternative is scanning every slot, which was fine at twenty entries and
+// is not at five hundred — and it would be paid on every entry of every
+// addToBucket call, turning restocking into O(existing * added).
+func hasBucketToken(id uint64, tokenId string) bool {
+	return getBucketField(id, "h|"+tokenId) == "1"
+}
+
+func markBucketToken(id uint64, tokenId string) {
+	setBucketField(id, "h|"+tokenId, "1")
+}
+
+// appendBucketEntries stocks a batch of entries, writing each slot once and the
+// counters once per stack rather than once per entry.
+//
+// Callers MUST have validated the entries first (non-empty id, non-zero amount,
+// stack in range, no duplicate, seller holds and has approved the units) —
+// this does the bookkeeping, not the checking.
+func appendBucketEntries(id uint64, entries []BucketEntry) uint64 {
+	// Per-stack deltas accumulated in memory, so a batch of 64 entries into one
+	// stack writes its counters once instead of 64 times.
+	nextSlot := make([]uint64, MaxBucketStacks)
+	stackDelta := make([]uint64, MaxBucketStacks)
+	touched := make([]bool, MaxBucketStacks)
+	// Chunk sums are sparse: only chunks this batch actually lands in.
+	chunkIdx := make([]uint64, 0, 8)
+	chunkStack := make([]uint64, 0, 8)
+	chunkDelta := make([]uint64, 0, 8)
+
+	unitsAdded := uint64(0)
+	for _, e := range entries {
+		if !touched[e.Stack] {
+			touched[e.Stack] = true
+			nextSlot[e.Stack] = bucketStackSlots(id, e.Stack)
+		}
+		idx := nextSlot[e.Stack]
+		setBucketSlot(id, e.Stack, idx, e.Amount, e.TokenId)
+		markBucketToken(id, e.TokenId)
+		nextSlot[e.Stack]++
+		stackDelta[e.Stack] = safeAdd(stackDelta[e.Stack], e.Amount)
+		unitsAdded = safeAdd(unitsAdded, e.Amount)
+
+		ch := idx / BucketChunk
+		found := false
+		for j := range chunkIdx {
+			if chunkIdx[j] == ch && chunkStack[j] == e.Stack {
+				chunkDelta[j] = safeAdd(chunkDelta[j], e.Amount)
+				found = true
+				break
+			}
+		}
+		if !found {
+			chunkIdx = append(chunkIdx, ch)
+			chunkStack = append(chunkStack, e.Stack)
+			chunkDelta = append(chunkDelta, e.Amount)
+		}
+	}
+
+	np := getBucketUint64(id, "np")
+	for stack := uint64(0); stack < MaxBucketStacks; stack++ {
+		if !touched[stack] {
+			continue
+		}
+		setBucketUint64(id, stackPrefix(stack)+"n", nextSlot[stack])
+		setBucketUint64(id, stackPrefix(stack)+"u",
+			safeAdd(bucketStackUnits(id, stack), stackDelta[stack]))
+		if stack+1 > np {
+			np = stack + 1
+		}
+	}
+	for j := range chunkIdx {
+		f := chunkField(chunkStack[j], chunkIdx[j])
+		setBucketUint64(id, f, safeAdd(getBucketUint64(id, f), chunkDelta[j]))
+	}
+	setBucketUint64(id, "np", np)
+	setBucketUint64(id, "n", safeAdd(getBucketUint64(id, "n"), uint64(len(entries))))
+	setBucketUint64(id, "u", safeAdd(bucketUnitsRemaining(id), unitsAdded))
+	return unitsAdded
+}
+
+// snapshotRoyaltySplitsForBucket mirrors snapshotRoyaltySplitsForBundle using bucketKey prefix.
+func snapshotRoyaltySplitsForBucket(id uint64, recips []string, bpss []uint64) {
+	n := uint64(len(recips))
+	for i := uint64(0); i < n; i++ {
+		is := strconv.FormatUint(i, 10)
+		setBucketField(id, "rs_"+is+"_r", recips[i])
+		setBucketUint64(id, "rs_"+is+"_b", bpss[i])
+	}
+	setBucketUint64(id, "rs_n", n)
+}
+
+// loadBucketRoyaltySplitSnapshot mirrors loadBundleRoyaltySplitSnapshot using bucketKey prefix.
+func loadBucketRoyaltySplitSnapshot(id uint64, fallbackRecip string, fallbackBps uint64) ([]string, []uint64) {
+	n := getBucketUint64(id, "rs_n")
+	if n > 0 {
+		recips := make([]string, n)
+		bpss := make([]uint64, n)
+		for i := uint64(0); i < n; i++ {
+			is := strconv.FormatUint(i, 10)
+			recips[i] = getBucketField(id, "rs_"+is+"_r")
+			bpss[i] = getBucketUint64(id, "rs_"+is+"_b")
+		}
+		return recips, bpss
+	}
+	if fallbackBps > 0 && fallbackRecip != "" {
+		return []string{fallbackRecip}, []uint64{fallbackBps}
+	}
+	return []string{}, []uint64{}
 }
 
 // snapshotRoyaltySplitsForBundle mirrors snapshotRoyaltySplitsForListing using bundleKey prefix.

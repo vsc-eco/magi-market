@@ -14,18 +14,18 @@ type InitPayload struct {
 }
 
 type ListPayload struct {
-	NftContract      string `json:"nftContract"`
-	TokenId          string `json:"tokenId"`
-	Amount           uint64 `json:"amount"`
-	PaymentToken     string `json:"paymentToken"`
-	PricePerUnit     string `json:"pricePerUnit"`
-	ExpirationBlock  uint64 `json:"expirationBlock"`
-	StartBlock       uint64 `json:"startBlock"`
-	PayoutMode       string `json:"payoutMode"`       // "" | "default" | "unmap" (F1 opt-in)
-	PayoutL1Address  string `json:"payoutL1Address"`  // required when PayoutMode=="unmap"
-	DexPool          string `json:"dexPool"`          // F2: DEX pool contract id; "" = disabled
-	SettleToken      string `json:"settleToken"`      // F2: asset_out id; "" = disabled
-	MinSettleOut     string `json:"minSettleOut"`     // F2: slippage floor (decimal string)
+	NftContract     string `json:"nftContract"`
+	TokenId         string `json:"tokenId"`
+	Amount          uint64 `json:"amount"`
+	PaymentToken    string `json:"paymentToken"`
+	PricePerUnit    string `json:"pricePerUnit"`
+	ExpirationBlock uint64 `json:"expirationBlock"`
+	StartBlock      uint64 `json:"startBlock"`
+	PayoutMode      string `json:"payoutMode"`      // "" | "default" | "unmap" (F1 opt-in)
+	PayoutL1Address string `json:"payoutL1Address"` // required when PayoutMode=="unmap"
+	DexPool         string `json:"dexPool"`         // F2: DEX pool contract id; "" = disabled
+	SettleToken     string `json:"settleToken"`     // F2: asset_out id; "" = disabled
+	MinSettleOut    string `json:"minSettleOut"`    // F2: slippage floor (decimal string)
 }
 
 type DelistPayload struct {
@@ -619,9 +619,9 @@ type RoyaltySplitsResponse struct {
 }
 
 type RoyaltySplitsSetEvent struct {
-	Type       string                      `json:"type"`
-	Attributes RoyaltySplitsSetAttributes  `json:"attributes"`
-	Tx         string                      `json:"tx"`
+	Type       string                     `json:"type"`
+	Attributes RoyaltySplitsSetAttributes `json:"attributes"`
+	Tx         string                     `json:"tx"`
 }
 
 type RoyaltySplitsSetAttributes struct {
@@ -637,18 +637,29 @@ type SweepPayload struct {
 	NftContract string   `json:"nftContract"`
 	ListingIds  []uint64 `json:"listingIds"`
 	MaxTotal    string   `json:"maxTotal"`
+	// The one asset this sweep spends. MaxTotal is a bare integer with no
+	// currency of its own, so without pinning the token every listing is
+	// paid in, the cap would compare a sum of different currencies against
+	// a number that belongs to none of them. Empty is still accepted and
+	// means "whatever the first listing is priced in" — old callers that
+	// only ever swept a single token keep working, and the ones that mixed
+	// tokens now abort, which is the point.
+	PaymentToken string `json:"paymentToken"`
 }
 
 type SweptEvent struct {
-	Type       string           `json:"type"`
-	Attributes SweptAttributes  `json:"attributes"`
-	Tx         string           `json:"tx"`
+	Type       string          `json:"type"`
+	Attributes SweptAttributes `json:"attributes"`
+	Tx         string          `json:"tx"`
 }
 
 type SweptAttributes struct {
 	Buyer string `json:"buyer"`
 	Count uint64 `json:"count"`
 	Total string `json:"total"`
+	// Which asset Total is denominated in. Without it the number is not
+	// interpretable by anything downstream — the indexer included.
+	PaymentToken string `json:"paymentToken"`
 }
 
 // ===================================
@@ -665,9 +676,9 @@ type EffectiveFeeResponse struct {
 }
 
 type CollectionFeeSetEvent struct {
-	Type       string                       `json:"type"`
-	Attributes CollectionFeeSetAttributes   `json:"attributes"`
-	Tx         string                       `json:"tx"`
+	Type       string                     `json:"type"`
+	Attributes CollectionFeeSetAttributes `json:"attributes"`
+	Tx         string                     `json:"tx"`
 }
 
 type CollectionFeeSetAttributes struct {
@@ -676,9 +687,9 @@ type CollectionFeeSetAttributes struct {
 }
 
 type CollectionFeeClearedEvent struct {
-	Type       string                          `json:"type"`
-	Attributes CollectionFeeClearedAttributes  `json:"attributes"`
-	Tx         string                          `json:"tx"`
+	Type       string                         `json:"type"`
+	Attributes CollectionFeeClearedAttributes `json:"attributes"`
+	Tx         string                         `json:"tx"`
 }
 
 type CollectionFeeClearedAttributes struct {
@@ -692,6 +703,272 @@ type CollectionFeeClearedAttributes struct {
 type BundleItem struct {
 	TokenId string `json:"tokenId"`
 	Amount  uint64 `json:"amount"`
+}
+
+// ===================================
+// Buckets (random-draw sales)
+// ===================================
+
+// MaxBucketEntries caps how many distinct token ids one bucket holds.
+//
+// This used to be 20, because the draw re-read and re-scanned EVERY entry on
+// every draw: cost was O(entries), so a large bucket could not be drawn from
+// inside the default rcLimit at all. Entries now live in per-stack slot arrays
+// with chunked unit sums (see internal.go), so a draw touches
+// `entries/BucketChunk + BucketChunk` slots instead of all of them, and the
+// cap can be set by what the STATE should sensibly hold rather than by what a
+// single draw can afford to scan.
+const MaxBucketEntries = 512
+
+// MaxEntriesPerCall caps how many entries ONE listBucket or addToBucket call
+// may add. A full bucket cannot be stocked in a single transaction at any
+// per-entry cost, which is exactly why addToBucket exists — stock a big bucket
+// across several calls.
+//
+// Measured: listing costs ~1570 RC fixed plus ~265 RC per entry (1 entry =
+// 1572, 5 entries = 2634), against a default 10000 rcLimit. 24 entries lands
+// near 7900 and leaves room for the sellers who cost more per entry — anyone
+// authorising with per-token allowances instead of operator approval, or
+// stocking a collection they do not own, pays an extra state read each.
+//
+// A cap the RC budget cannot honour would just move the failure from a clear
+// message to an opaque "cost limit exceeded", which is the same mistake
+// MaxDrawWork exists to avoid.
+const MaxEntriesPerCall = 24
+
+// BucketChunk is how many slots share one cached unit sum. The draw walks chunk
+// sums to find the right chunk, then scans inside it, so per-draw work is
+// `entries/BucketChunk + BucketChunk` — minimised near sqrt(entries). 32 is the
+// sweet spot for a 512-entry bucket (16 + 32) and costs nothing at small sizes,
+// where the whole bucket is one chunk.
+const BucketChunk = 32
+
+// MaxDrawsPerTx is an absolute ceiling on the draws one transaction performs.
+// It is a backstop; MaxDrawWork below is the constraint that actually binds.
+const MaxDrawsPerTx = 24
+
+// MaxDrawWork bounds the WORK a purchase may ask for. RC still scales with the
+// entry count, just far more slowly than it did, so the bound is kept with a
+// formula that tracks the new shape:
+//
+//	work = draws * (entries/BucketChunk + min(entries, BucketChunk) + 8)
+//
+// Measured on the chunked layout (RC, on the default 10000 rcLimit):
+//
+//	fixed                            ~1840 RC   payment pull, fee/royalty/seller
+//	per work unit                      ~13 RC
+//
+//	 1 draw  x 500 entries =  55 work =  2738 RC   (measured)
+//	10 draws x 500 entries = 550 work =  9113 RC   (measured)
+//	10 draws x   5 entries = 130 work =  3687 RC   (measured)
+//
+// (10000 - 1840) / 13 ~= 620, so 600 is the honest ceiling: it admits the
+// 10-card pack over a full 500-entry bucket that has just been measured, and
+// refuses the 11-card one that would not fit.
+//
+// The point is unchanged: refuse an oversized purchase with a clear message
+// BEFORE taking payment, rather than letting it die deep in execution with an
+// opaque "cost limit exceeded".
+const MaxDrawWork = 600
+
+// MaxBucketStacks caps how many stacks a pack may draw from. Each stack costs a
+// pass over the entries per draw, so this bounds the work a single purchase can
+// ask for. Four is already a Pokemon-style pack (commons / uncommons / reverse
+// holo / rare); eight leaves room without letting a pack become unbounded.
+const MaxBucketStacks = 8
+
+// MaxBucketNameLen bounds the seller's display name. Long enough for a real
+// product title, short enough that it cannot be used to bloat state or an
+// event log. Bytes, not runes — the cap is about storage, and a multi-byte
+// name simply gets fewer characters.
+const MaxBucketNameLen = 64
+
+// BucketEntry is one already-minted token id and how many units of it are in
+// the bucket. Amount > 1 is how editions are stocked: each unit is a separate
+// prize, so an entry with 50 units is 50x likelier to be drawn than a 1/1.
+//
+// Stack groups entries that compete with each other. A bucket with everything in
+// stack 0 is one flat pile — the simple case. Splitting entries across stacks is
+// what makes a real card pack possible: commons in stack 0, rares in stack 1, and
+// a pack that always takes one draw from stack 1 always contains a rare.
+type BucketEntry struct {
+	TokenId string `json:"tokenId"`
+	Amount  uint64 `json:"amount"`
+	Stack    uint64 `json:"stack"`
+}
+
+// ListBucketPayload creates a bucket. The seller enables single draws, pack
+// draws, or both: a zero/empty price switches that mode off, and at least one
+// must be on.
+//
+// PackDraws describes a pack as draws-per-stack, indexed by stack: [5] is five
+// draws from one flat pile, and [4,3,1,1] is a card pack — four commons, three
+// uncommons, one reverse holo, one rare — where the last slot GUARANTEES a rare
+// because it can only be filled from stack 3. One field expresses both the
+// simple and the elaborate case, and the pack size is just its sum.
+//
+// Single draws always come from stack 0.
+type ListBucketPayload struct {
+	// Optional display name — "Base Set Booster", not "#0". The contract
+	// never reads it; it exists so every client shows the seller's name for
+	// the sale instead of an auto-incrementing id.
+	Name            string        `json:"name"`
+	NftContract     string        `json:"nftContract"`
+	Entries         []BucketEntry `json:"entries"`
+	PaymentToken    string        `json:"paymentToken"`
+	PricePerDraw    string        `json:"pricePerDraw"`
+	PricePerPack    string        `json:"pricePerPack"`
+	PackDraws       []uint64      `json:"packDraws"`
+	ExpirationBlock uint64        `json:"expirationBlock"`
+}
+
+// BuyFromBucketPayload buys from a bucket. Mode "single" draws Quantity times;
+// mode "pack" draws Quantity * packSize times. MaxTotalPrice is the same
+// slippage guard `buy` and `sweep` carry — empty disables it.
+type BuyFromBucketPayload struct {
+	BucketId      uint64 `json:"bucketId"`
+	Mode          string `json:"mode"`
+	Quantity      uint64 `json:"quantity"`
+	MaxTotalPrice string `json:"maxTotalPrice"`
+}
+
+type BucketIdPayload struct {
+	BucketId uint64 `json:"bucketId"`
+}
+
+// AddToBucketPayload stocks MORE entries into a bucket that already exists.
+//
+// A 500-card bucket cannot be listed in one transaction — the per-entry write
+// cost alone exceeds the rcLimit long before that — so stocking is chunked:
+// listBucket opens the bucket with a first batch, addToBucket appends the rest.
+type AddToBucketPayload struct {
+	BucketId uint64        `json:"bucketId"`
+	Entries  []BucketEntry `json:"entries"`
+}
+
+type BucketRestockedEvent struct {
+	Type       string                    `json:"type"`
+	Attributes BucketRestockedAttributes `json:"attributes"`
+	Tx         string                    `json:"tx"`
+}
+
+type BucketRestockedAttributes struct {
+	BucketId     uint64        `json:"bucketId"`
+	Seller       string        `json:"seller"`
+	Entries      []BucketEntry `json:"entries"`
+	Added        uint64        `json:"added"`
+	TotalEntries uint64        `json:"totalEntries"`
+	UnitsAdded   uint64        `json:"unitsAdded"`
+}
+
+type BucketListedEvent struct {
+	Type       string                 `json:"type"`
+	Attributes BucketListedAttributes `json:"attributes"`
+	Tx         string                 `json:"tx"`
+}
+
+// BucketListedAttributes carries everything an indexer needs to mirror a new
+// bucket without reading contract state: the commercial terms, the fee and
+// royalty snapshot taken at list time, and the entries themselves.
+//
+// The entries are safe to inline because listBucket accepts at most
+// MaxEntriesPerCall of them, so one event can never carry an unbounded array —
+// a large bucket arrives as a listing plus a series of restocks, each bounded
+// the same way.
+type BucketListedAttributes struct {
+	BucketId         uint64        `json:"bucketId"`
+	Name             string        `json:"name"`
+	Seller           string        `json:"seller"`
+	NftContract      string        `json:"nftContract"`
+	PaymentToken     string        `json:"paymentToken"`
+	PricePerDraw     string        `json:"pricePerDraw"`
+	PricePerPack     string        `json:"pricePerPack"`
+	PackDraws        []uint64      `json:"packDraws"`
+	ExpirationBlock  uint64        `json:"expirationBlock"`
+	FeeBps           uint64        `json:"feeBps"`
+	RoyaltyBps       uint64        `json:"royaltyBps"`
+	RoyaltyRecipient string        `json:"royaltyRecipient"`
+	Entries          []BucketEntry `json:"entries"`
+	EntryCount       uint64        `json:"entryCount"`
+	Units            uint64        `json:"units"`
+}
+
+// BucketDrawEvent fires once per delivered unit rather than carrying an array,
+// so the indexer gets one row per NFT and can answer "what did this purchase
+// yield" and "who holds it now" without unpacking a list.
+type BucketDrawEvent struct {
+	Type       string               `json:"type"`
+	Attributes BucketDrawAttributes `json:"attributes"`
+	Tx         string               `json:"tx"`
+}
+
+type BucketDrawAttributes struct {
+	BucketId  uint64 `json:"bucketId"`
+	Buyer     string `json:"buyer"`
+	TokenId   string `json:"tokenId"`
+	Stack      uint64 `json:"stack"`
+	DrawIndex uint64 `json:"drawIndex"`
+}
+
+type BucketPurchaseEvent struct {
+	Type       string                   `json:"type"`
+	Attributes BucketPurchaseAttributes `json:"attributes"`
+	Tx         string                   `json:"tx"`
+}
+
+type BucketPurchaseAttributes struct {
+	BucketId     uint64 `json:"bucketId"`
+	Buyer        string `json:"buyer"`
+	Mode         string `json:"mode"`
+	Draws        uint64 `json:"draws"`
+	PaymentToken string `json:"paymentToken"`
+	Paid         string `json:"paid"`
+	Fee          string `json:"fee"`
+	Royalty      string `json:"royalty"`
+	UnitsLeft    uint64 `json:"unitsLeft"`
+}
+
+// BucketEntryDroppedEvent records an entry pruned mid-draw because the seller
+// no longer holds it or revoked approval. Without this the units simply vanish
+// from the bucket with no on-chain explanation.
+type BucketEntryDroppedEvent struct {
+	Type       string                       `json:"type"`
+	Attributes BucketEntryDroppedAttributes `json:"attributes"`
+	Tx         string                       `json:"tx"`
+}
+
+type BucketEntryDroppedAttributes struct {
+	BucketId uint64 `json:"bucketId"`
+	TokenId  string `json:"tokenId"`
+	Stack     uint64 `json:"stack"`
+	Units    uint64 `json:"units"`
+	Reason   string `json:"reason"`
+}
+
+// BucketSoldOutEvent fires when the last unit leaves a bucket and it closes
+// itself. Without it the only way to observe a closed bucket is delisting,
+// which is a SELLER action — a bucket that simply sold out would look open
+// forever to anything reading the log.
+type BucketSoldOutEvent struct {
+	Type       string                  `json:"type"`
+	Attributes BucketSoldOutAttributes `json:"attributes"`
+	Tx         string                  `json:"tx"`
+}
+
+type BucketSoldOutAttributes struct {
+	BucketId uint64 `json:"bucketId"`
+	Seller   string `json:"seller"`
+}
+
+type BucketDelistedEvent struct {
+	Type       string                   `json:"type"`
+	Attributes BucketDelistedAttributes `json:"attributes"`
+	Tx         string                   `json:"tx"`
+}
+
+type BucketDelistedAttributes struct {
+	BucketId uint64 `json:"bucketId"`
+	Seller   string `json:"seller"`
 }
 
 type ListBundlePayload struct {
@@ -718,9 +995,9 @@ type BundleResponse struct {
 }
 
 type BundleListedEvent struct {
-	Type       string                  `json:"type"`
-	Attributes BundleListedAttributes  `json:"attributes"`
-	Tx         string                  `json:"tx"`
+	Type       string                 `json:"type"`
+	Attributes BundleListedAttributes `json:"attributes"`
+	Tx         string                 `json:"tx"`
 }
 
 type BundleListedAttributes struct {
@@ -732,9 +1009,9 @@ type BundleListedAttributes struct {
 }
 
 type BundleBoughtEvent struct {
-	Type       string                  `json:"type"`
-	Attributes BundleBoughtAttributes  `json:"attributes"`
-	Tx         string                  `json:"tx"`
+	Type       string                 `json:"type"`
+	Attributes BundleBoughtAttributes `json:"attributes"`
+	Tx         string                 `json:"tx"`
 }
 
 type BundleBoughtAttributes struct {
@@ -746,9 +1023,9 @@ type BundleBoughtAttributes struct {
 }
 
 type BundleDelistedEvent struct {
-	Type       string                    `json:"type"`
-	Attributes BundleDelistedAttributes  `json:"attributes"`
-	Tx         string                    `json:"tx"`
+	Type       string                   `json:"type"`
+	Attributes BundleDelistedAttributes `json:"attributes"`
+	Tx         string                   `json:"tx"`
 }
 
 type BundleDelistedAttributes struct {
@@ -792,9 +1069,9 @@ type SwapResponse struct {
 }
 
 type SwapProposedEvent struct {
-	Type       string                `json:"type"`
+	Type       string                 `json:"type"`
 	Attributes SwapProposedAttributes `json:"attributes"`
-	Tx         string                `json:"tx"`
+	Tx         string                 `json:"tx"`
 }
 
 type SwapProposedAttributes struct {
@@ -832,13 +1109,13 @@ type SwapCancelledAttributes struct {
 // ===================================
 
 type ListRentalPayload struct {
-	NftContract    string `json:"nftContract"`
-	TokenId        string `json:"tokenId"`
-	Amount         uint64 `json:"amount"`
-	PaymentToken   string `json:"paymentToken"`
-	PricePerBlock  string `json:"pricePerBlock"`
-	MinBlocks      uint64 `json:"minBlocks"`
-	MaxBlocks      uint64 `json:"maxBlocks"`
+	NftContract   string `json:"nftContract"`
+	TokenId       string `json:"tokenId"`
+	Amount        uint64 `json:"amount"`
+	PaymentToken  string `json:"paymentToken"`
+	PricePerBlock string `json:"pricePerBlock"`
+	MinBlocks     uint64 `json:"minBlocks"`
+	MaxBlocks     uint64 `json:"maxBlocks"`
 }
 
 type RentPayload struct {
@@ -878,9 +1155,9 @@ type ActiveRentalResponse struct {
 }
 
 type RentalListedEvent struct {
-	Type       string                   `json:"type"`
-	Attributes RentalListedAttributes   `json:"attributes"`
-	Tx         string                   `json:"tx"`
+	Type       string                 `json:"type"`
+	Attributes RentalListedAttributes `json:"attributes"`
+	Tx         string                 `json:"tx"`
 }
 
 type RentalListedAttributes struct {
@@ -963,9 +1240,9 @@ type MintSpotListingResponse struct {
 }
 
 type MintSpotsListedEvent struct {
-	Type       string                      `json:"type"`
-	Attributes MintSpotsListedAttributes   `json:"attributes"`
-	Tx         string                      `json:"tx"`
+	Type       string                    `json:"type"`
+	Attributes MintSpotsListedAttributes `json:"attributes"`
+	Tx         string                    `json:"tx"`
 }
 
 type MintSpotsListedAttributes struct {
@@ -991,9 +1268,9 @@ type MintSpotBoughtAttributes struct {
 }
 
 type MintSpotsDelistedEvent struct {
-	Type       string                        `json:"type"`
-	Attributes MintSpotsDelistedAttributes   `json:"attributes"`
-	Tx         string                        `json:"tx"`
+	Type       string                      `json:"type"`
+	Attributes MintSpotsDelistedAttributes `json:"attributes"`
+	Tx         string                      `json:"tx"`
 }
 
 type MintSpotsDelistedAttributes struct {

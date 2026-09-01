@@ -2,6 +2,7 @@ package contract_test
 
 import (
 	"embed"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"vsc-node/lib/test_utils"
 	contract_session "vsc-node/modules/contract/session"
 	"vsc-node/modules/db/vsc/contracts"
+	ledgerDb "vsc-node/modules/db/vsc/ledger"
 	stateEngine "vsc-node/modules/state-processing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,6 +23,7 @@ var _ = embed.FS{}
 
 const MarketContractID = "market"
 const TokenID = "paytoken"
+
 // AssetTokenID is a 2nd magi_token instance used as the SELLABLE asset in
 // token-for-token sale tests (distinct from the payment token).
 const AssetTokenID = "assettoken"
@@ -40,9 +43,9 @@ const FeeTokenID = "contract:feetoken"
 // mock has NO balanceOf entrypoint, proving the raw-read path is exercised.
 const UtxoMockID = "contract:utxomock"
 
-// DexMockID is the DEX pool mock's contract id. Used as paymentToken in F2
+// DexMockID is the DEX stack mock's contract id. Used as paymentToken in F2
 // tests so that escrowIn (which calls transferFrom on the paymentToken) works
-// against dexmock's ledger, and as the DEX pool address for swap calls.
+// against dexmock's ledger, and as the DEX stack address for swap calls.
 // The mock's a-<acct> BE-u64 storage is identical to utxomock so
 // magi-market's raw-read tokenBalanceOf works for balance-delta accounting.
 const DexMockID = "contract:dexmock"
@@ -53,6 +56,18 @@ const DexMockID = "contract:dexmock"
 // mint-spot tests to prove the market side against the documented ABI without
 // requiring the real nft contract to implement the feature first.
 const MintNftMockID = "mintnftmock"
+
+// CallerMockID is a contract that calls the market on a user's behalf. It
+// exists to prove buyFromBucket refuses contract callers, which is what closes
+// the retry-on-loss attack on random draws.
+const CallerMockID = "callermock"
+
+// HostileNftID is a collection that misbehaves during delivery — it can refuse
+// a transfer outright, or read the market's own state from inside one. Both are
+// needed to test claims that a well-behaved collection can never exercise: that
+// a failed transfer aborts the purchase, and that the market writes its state
+// BEFORE calling out (CEI).
+const HostileNftID = "hostilenft"
 
 const ownerAddress = "hive:tibfox"
 const feeRecipientAddress = "hive:feerecipient"
@@ -83,9 +98,22 @@ var DexMockWasm []byte
 //go:embed artifacts/mintnftmock.wasm
 var MintNftMockWasm []byte
 
+//go:embed artifacts/callermock.wasm
+var CallerMockWasm []byte
+
+//go:embed artifacts/hostilenft.wasm
+var HostileNftWasm []byte
+
 const defaultTimestamp = "2025-09-03T00:00:00"
 
 const gas = uint(500_000_000)
+
+// bigGas is for fixture-building and large-bucket calls. maxGas in this harness
+// is an assert.LessOrEqual AFTER the call, not an execution limit — RcLimit is
+// the only budget that actually rejects anything — so a fixture that mints 500
+// NFTs trips the default assertion without saying anything about whether the
+// contract is affordable on chain.
+const bigGas = uint(4_000_000_000)
 
 // SetupContractTest creates a fresh test instance with marketplace + token + NFT contracts.
 func SetupContractTest() *test_utils.ContractTest {
@@ -99,6 +127,8 @@ func SetupContractTest() *test_utils.ContractTest {
 	ct.RegisterContract(UtxoMockID, ownerAddress, UtxoMockWasm)
 	ct.RegisterContract(DexMockID, ownerAddress, DexMockWasm)
 	ct.RegisterContract(MintNftMockID, ownerAddress, MintNftMockWasm)
+	ct.RegisterContract(CallerMockID, ownerAddress, CallerMockWasm)
+	ct.RegisterContract(HostileNftID, ownerAddress, HostileNftWasm)
 	return &ct
 }
 
@@ -158,6 +188,19 @@ func CallNft(
 	return callContract(t, ct, NftContractID, action, payload, intents, authUser, defaultTimestamp, expectedResult, maxGas, expectedOutput)
 }
 
+// CallHostileNft drives the misbehaving collection mock.
+func CallHostileNft(
+	t *testing.T,
+	ct *test_utils.ContractTest,
+	action string,
+	payload json.RawMessage,
+	authUser string,
+	expectedResult bool,
+	expectedOutput string,
+) (test_utils.ContractTestCallResult, uint, map[string]contract_session.LogOutput) {
+	return callContract(t, ct, HostileNftID, action, payload, nil, authUser, defaultTimestamp, expectedResult, gas, expectedOutput)
+}
+
 func callContract(
 	t *testing.T,
 	ct *test_utils.ContractTest,
@@ -175,8 +218,12 @@ func callContract(
 	cr := ct.Call(stateEngine.TxVscCallContract{
 		Caller: authUser,
 		Self: stateEngine.TxSelf{
-			TxId:                 fmt.Sprintf("%s-%s-tx", contractId, action),
-			BlockId:              "block1",
+			TxId: fmt.Sprintf("%s-%s-tx", contractId, action),
+			// A realistic Hive block id: 40 hex chars whose first 8 are the
+			// block number. Contracts that derive randomness from block.id
+			// (buckets) validate its shape, and a short mock id would both fail
+			// that check and hide how little entropy a truncated id carries.
+			BlockId:              "05a995bf3a096cb001d6f541f46e6f67394cea62",
 			Index:                0,
 			OpIndex:              0,
 			Timestamp:            timestamp,
@@ -282,6 +329,68 @@ func InitFullSetup(t *testing.T, ct *test_utils.ContractTest) {
 func MintNft(t *testing.T, ct *test_utils.ContractTest, to, tokenId string, amount, maxSupply uint64) {
 	payload := fmt.Sprintf(`{"to":"%s","id":"%s","amount":%d,"maxSupply":%d}`, to, tokenId, amount, maxSupply)
 	CallNft(t, ct, "mint", []byte(payload), nil, ownerAddress, true, gas, "")
+}
+
+// FundRc raises an account's RC budget for the rest of the test.
+//
+// RC is not per call. The harness accumulates consumption per ACCOUNT across
+// the whole test, and an account's budget is its HBD ledger balance plus a 10k
+// free tier — so a test that mints, approves and lists from one account
+// silently spends the same 10k it wanted to measure with.
+//
+// The deposit target must be a REAL Hive account name: the ledger checks it
+// against Hive's rules and a length limit (the full "hive:name" under 17
+// characters), and on a mismatch it quietly credits hive:contract-test-account
+// instead — leaving the intended account on the free tier while this call
+// appears to succeed. That silence cost a long debugging detour, so the credit
+// is verified here rather than assumed.
+func FundRc(t *testing.T, ct *test_utils.ContractTest, account string, amount int64) {
+	t.Helper()
+	before := ct.GetAvailableRCs(account)
+	ct.Deposit(account, amount, ledgerDb.AssetHbd)
+	after := ct.GetAvailableRCs(account)
+	if after <= before {
+		t.Fatalf("FundRc(%q) credited nothing (rc %d -> %d). The ledger redirects "+
+			"deposits whose target is not a valid Hive account — the full %q must be "+
+			"lowercase, alphanumeric and under 17 characters (it is %d).",
+			account, before, after, account, len(account))
+	}
+}
+
+// MintNftBatch mints many token ids, splitting them across as many calls as the
+// per-call rcLimit allows.
+//
+// Minting one id per call is what made big fixtures unaffordable. The NFT
+// contract accepts 256 ids per batch, but that is a batch-size cap, not a cost
+// cap: 250 ids in one call needs well over the 10000 RC a real transaction
+// gets. So batch generously, but stay inside one transaction's budget.
+const mintBatchChunk = 20
+
+func MintNftBatch(t *testing.T, ct *test_utils.ContractTest, to string, tokenIds []string, amount, maxSupply uint64) {
+	for off := 0; off < len(tokenIds); off += mintBatchChunk {
+		end := off + mintBatchChunk
+		if end > len(tokenIds) {
+			end = len(tokenIds)
+		}
+		ids := "["
+		amts := "["
+		sup := "["
+		for i, id := range tokenIds[off:end] {
+			if i > 0 {
+				ids += ","
+				amts += ","
+				sup += ","
+			}
+			ids += `"` + id + `"`
+			amts += fmt.Sprintf("%d", amount)
+			sup += fmt.Sprintf("%d", maxSupply)
+		}
+		ids += "]"
+		amts += "]"
+		sup += "]"
+		payload := fmt.Sprintf(`{"to":"%s","ids":%s,"amounts":%s,"maxSupplies":%s}`, to, ids, amts, sup)
+		CallNft(t, ct, "mintBatch", []byte(payload), nil, ownerAddress, true, bigGas, "")
+	}
 }
 
 // MintAndApproveToken mints payment tokens to a user and approves the marketplace to spend them.
@@ -453,6 +562,28 @@ func QueryTokenBalance(t *testing.T, ct *test_utils.ContractTest, account string
 }
 
 // QueryNftBalance queries balanceOf on the NFT contract.
+// NftBalanceState reads a holder's balance straight from the NFT contract's
+// state instead of calling balanceOf.
+//
+// Every QueryNftBalance is a contract call billed to one shared account on the
+// 10k free tier, so a test with a few hundred assertions exhausts it and starts
+// failing on the ASSERTIONS rather than on anything it meant to test. A state
+// read costs nothing. Use it where the assertion count is large; prefer the
+// contract call where the read itself is part of what is under test.
+//
+// magi_nft stores balances as raw little-endian bytes — a balance of 4 is the
+// single byte 0x04, not "4" — which is what the market's decodeNftU64 expects.
+func NftBalanceState(ct *test_utils.ContractTest, account, tokenId string) uint64 {
+	raw := ct.StateGet(NftContractID, "bal|"+account+"|"+tokenId)
+	b := []byte(raw)
+	if len(b) == 0 || len(b) > 8 {
+		return 0
+	}
+	var buf [8]byte
+	copy(buf[:], b)
+	return binary.LittleEndian.Uint64(buf[:])
+}
+
 func QueryNftBalance(t *testing.T, ct *test_utils.ContractTest, account, tokenId string) uint64 {
 	result, _, _ := CallNft(t, ct, "balanceOf",
 		[]byte(fmt.Sprintf(`{"account":"%s","id":"%s"}`, account, tokenId)), nil, "hive:anyone", true, gas, "")
